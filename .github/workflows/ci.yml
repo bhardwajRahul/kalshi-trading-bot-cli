@@ -1,61 +1,32 @@
-# Environment variables
-.env
-.env.local
-.env.*
+name: CI
 
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
 
-# Virtual environments
-venv/
-env/
-ENV/
-.venv
+jobs:
+  checks:
+    if: github.event.action != 'labeled' || github.event.label.name == 'run-ci'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - task: typecheck
+            command: bun run typecheck
+          - task: test
+            command: bun test
+    steps:
+      - uses: actions/checkout@v4
 
-# Node.js
-node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
 
-# IDEs
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-.DS_Store
-.release-notes-*.md
+      - name: Install dependencies
+        run: bun install --frozen-lockfile --ignore-scripts
 
-# UV
-.uv/
-
-# Cursor files
-.cursor/
-
-# App context files (offloaded tool outputs)
-.kalshi-deep-trading-bot/*
-
-
-logs/
-coverage.json
-*.pem
+      - name: Run ${{ matrix.task }}
+        run: ${{ matrix.command }}
