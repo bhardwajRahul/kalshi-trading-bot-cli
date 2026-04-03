@@ -11,7 +11,7 @@ export function formatBoxHeader(title: string): string[] {
   const left = Math.floor(pad / 2);
   const right = pad - left;
   return [
-    '',
+    '\n',
     '╔' + '═'.repeat(inner) + '╗',
     '║' + ' '.repeat(left) + safeTitle + ' '.repeat(right) + '║',
     '╚' + '═'.repeat(inner) + '╝',
