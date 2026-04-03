@@ -2,7 +2,7 @@ import type { Database } from 'bun:sqlite';
 import type { AuditTrail } from '../audit/trail.js';
 import { callKalshiApi, fetchAllPages } from '../tools/kalshi/api.js';
 import type { KalshiEvent, KalshiMarket, KalshiSeries } from '../tools/kalshi/types.js';
-import { ensureIndex } from '../tools/kalshi/search-index.js';
+import { ensureIndex, getRefreshPromise } from '../tools/kalshi/search-index.js';
 import { upsertEvent, deactivateExpired } from '../db/events.js';
 import { getThemeTickers } from '../db/themes.js';
 
@@ -120,6 +120,10 @@ export class ThemeResolver {
     // Kalshi /events API does not support server-side category filtering,
     // so query the local SQLite index instead of fetching all open events
     await ensureIndex();
+    // If ensureIndex kicked off a background refresh (first run / empty index),
+    // await it so we don't query an unpopulated event_index table
+    const pending = getRefreshPromise();
+    if (pending) await pending;
     const rows = this.db.query(
       `SELECT event_ticker FROM event_index WHERE category = ?`,
     ).all(categoryLabel) as { event_ticker: string }[];
