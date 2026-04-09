@@ -9,7 +9,7 @@ import { createOctagonInvoker } from '../scan/invoker.js';
 import * as readline from 'node:readline';
 import { callKalshiApi, KalshiApiError } from '../tools/kalshi/api.js';
 import type { KalshiMarket, KalshiEvent, KalshiOrder, KalshiPosition } from '../tools/kalshi/types.js';
-import { openPosition } from '../db/positions.js';
+import { openPosition, closePosition, getOpenPositions } from '../db/positions.js';
 import { logTrade } from '../db/trades.js';
 import { formatRawReport, parseMarketProb, parsePriceField } from '../controllers/browse.js';
 import type { PriceDriver, Catalyst, Source } from '../scan/types.js';
@@ -142,7 +142,11 @@ export async function resolveMarket(input: string): Promise<KalshiMarket> {
   throw new Error(`Could not find a market for "${input}". Try a full market ticker (e.g. KXBTC-26MAR14-T50049), event ticker (e.g. KXBTC-26MAR14), or series ticker (e.g. KXBTC).`);
 }
 
-export async function handleAnalyze(ticker: string, refresh = false): Promise<AnalyzeData> {
+export async function handleAnalyze(
+  ticker: string,
+  refresh = false,
+  providedPosition?: { direction: 'yes' | 'no'; size: number } | null,
+): Promise<AnalyzeData> {
   const db = getDb();
 
   // Resolve input to a market — accepts market, event, or series tickers
@@ -229,25 +233,28 @@ export async function handleAnalyze(ticker: string, refresh = false): Promise<An
   // Risk gate
   const gate = riskGate({ ticker: resolvedTicker, eventTicker, kelly, market, db });
 
-  // Check if user holds a position in this market
-  let existingPosition: { direction: 'yes' | 'no'; size: number } | null = null;
-  try {
-    const posData = await callKalshiApi('GET', '/portfolio/positions', {
-      params: { ticker: resolvedTicker },
-    });
-    const positions = (posData.market_positions ?? posData.positions ?? []) as KalshiPosition[];
-    const match = positions.find((p) => p.ticker === resolvedTicker);
-    if (match) {
-      const rawPos = parseFloat(String(match.position ?? '0'));
-      if (rawPos !== 0) {
-        existingPosition = {
-          direction: rawPos > 0 ? 'yes' : 'no',
-          size: Math.abs(Math.round(rawPos)),
-        };
+  // Use caller-provided position or fetch from API when not provided
+  let existingPosition: { direction: 'yes' | 'no'; size: number } | null =
+    providedPosition !== undefined ? (providedPosition ?? null) : null;
+  if (providedPosition === undefined) {
+    try {
+      const posData = await callKalshiApi('GET', '/portfolio/positions', {
+        params: { ticker: resolvedTicker },
+      });
+      const positions = (posData.market_positions ?? posData.positions ?? []) as KalshiPosition[];
+      const match = positions.find((p) => p.ticker === resolvedTicker);
+      if (match) {
+        const rawPos = parseFloat(String(match.position ?? '0'));
+        if (rawPos !== 0) {
+          existingPosition = {
+            direction: rawPos > 0 ? 'yes' : 'no',
+            size: Math.abs(Math.round(rawPos)),
+          };
+        }
       }
+    } catch {
+      // Position fetch failed (e.g. demo mode) — continue without
     }
-  } catch {
-    // Position fetch failed (e.g. demo mode) — continue without
   }
 
   // Build signal — position-aware
@@ -519,6 +526,43 @@ export async function promptAnalyzeActions(data: AnalyzeData): Promise<void> {
 
             const orderRes = await callKalshiApi('POST', '/portfolio/orders', { body: orderPayload });
             const order = (orderRes.order ?? orderRes) as KalshiOrder;
+
+            const db = getDb();
+            const now = Math.floor(Date.now() / 1000);
+
+            // Find matching open DB position for this ticker to close
+            const dbPositions = getOpenPositions(db);
+            const dbMatch = dbPositions.find(
+              (p) => p.ticker === data.ticker && p.direction === sellSide,
+            );
+
+            logTrade(db, {
+              trade_id: crypto.randomUUID(),
+              position_id: dbMatch?.position_id ?? '',
+              order_id: order.order_id,
+              ticker: data.ticker,
+              action: 'sell',
+              side: sellSide,
+              size: sellSize,
+              price: closePrice,
+              fill_status: order.status,
+              kalshi_response: JSON.stringify(order),
+              created_at: now,
+            });
+
+            auditTrail.log({
+              type: 'TRADE_EXECUTED',
+              ticker: data.ticker,
+              order_id: order.order_id,
+              fill_price: closePrice,
+              size: sellSize,
+            });
+
+            // If order filled immediately, close the DB position
+            if (dbMatch && order.status === 'filled') {
+              closePosition(db, dbMatch.position_id, now);
+            }
+
             console.log(`  Sell order placed: ${order.order_id} (${order.status})`);
           } catch (err) {
             console.error(`  Trade failed: ${err instanceof Error ? err.message : String(err)}`);

@@ -38,8 +38,15 @@ export async function reviewPortfolio(): Promise<PositionReview[]> {
   if (nonZero.length === 0) return [];
 
   // Run analysis concurrently (cached — no Octagon credits consumed)
+  // Pass preloaded position to avoid N+1 portfolio fetches inside handleAnalyze
   const results = await Promise.allSettled(
-    nonZero.map((p) => handleAnalyze(p.ticker, false))
+    nonZero.map((p) => {
+      const rawPos = parseFloat(String(p.position ?? '0'));
+      const pos = rawPos !== 0
+        ? { direction: (rawPos > 0 ? 'yes' : 'no') as 'yes' | 'no', size: Math.abs(Math.round(rawPos)) }
+        : null;
+      return handleAnalyze(p.ticker, false, pos);
+    })
   );
 
   return results.map((result, i) => {
@@ -89,18 +96,16 @@ export async function reviewPortfolio(): Promise<PositionReview[]> {
       reason = `Edge decayed (${(decay * 100).toFixed(0)}pp) but below sell threshold`;
     }
 
-    // Close price = bid price of what we're selling
-    const market = analysis as unknown as Record<string, unknown>;
-    // We need to get bid prices from the market data embedded in analysis
-    // kelly.entryPriceCents is the ask (entry), not bid (exit)
-    // Use marketProb as a proxy: YES bid ≈ marketProb * 100 - 1¢ (rough approximation)
-    // The best available data here is kelly.entryPriceCents from the analysis
-    // For sells, we use the bid side — approximate as marketProb cents
-    const closePriceCents = Math.round(
-      direction === 'yes'
-        ? marketProb * 100 - 1   // YES bid ≈ market prob - 1¢ spread
-        : (1 - marketProb) * 100 - 1  // NO bid
-    );
+    // Use the bid-derived close price from handleAnalyze when available,
+    // fall back to marketProb approximation only if missing
+    const closePriceCents =
+      analysis.closePriceCents && analysis.closePriceCents > 0
+        ? analysis.closePriceCents
+        : Math.round(
+            direction === 'yes'
+              ? marketProb * 100 - 1
+              : (1 - marketProb) * 100 - 1
+          );
 
     return {
       ticker: pos.ticker,

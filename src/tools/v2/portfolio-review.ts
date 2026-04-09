@@ -32,7 +32,7 @@ export const portfolioReviewTool = new DynamicStructuredTool({
         reason: r.reason,
         closePriceCents: r.closePriceCents,
         sellCommand: r.signal === 'SELL'
-          ? `sell ${r.size} ${r.direction} contracts of ${r.ticker} at ${r.closePriceCents} cents`
+          ? `/sell ${r.ticker} ${r.size} ${r.closePriceCents} ${r.direction}`
           : null,
         analyzeError: r.analyzeError ?? null,
       })),
