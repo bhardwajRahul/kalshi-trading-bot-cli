@@ -11,6 +11,7 @@ import {
 import { handleThemes, formatThemesHuman } from './themes.js';
 import { handleAnalyze, formatAnalyzeHuman } from './analyze.js';
 import { handlePortfolio, formatPortfolioHuman } from './portfolio.js';
+import { reviewPortfolio, formatReviewHuman } from './review.js';
 import { buildHelp, validateTradeArgs } from './help.js';
 import { fetchMarketQuote } from './helpers.js';
 
@@ -72,6 +73,10 @@ export async function handleSlashCommand(input: string): Promise<CommandResult |
     // ─── /analyze ────────────────────────────────────────────────────
     case 'analyze':
       return handleAnalyzeCommand(args);
+
+    // ─── /review ─────────────────────────────────────────────────────
+    case 'review':
+      return handleReviewCommand();
 
     case 'config':
       // Fall through to agent — better handled by the LLM
@@ -211,6 +216,15 @@ function handleTradeCommand(action: 'buy' | 'sell', args: string[]): CommandResu
     output: formatOrderConfirmation(ticker.toUpperCase(), action, side, validated.count, validated.price),
     pendingTrade,
   };
+}
+
+async function handleReviewCommand(): Promise<CommandResult> {
+  try {
+    const reviews = await reviewPortfolio();
+    return { output: formatReviewHuman(reviews) };
+  } catch (err) {
+    return { output: `Review failed: ${err instanceof Error ? err.message : String(err)}` };
+  }
 }
 
 async function handleCancel(orderId: string | undefined): Promise<CommandResult> {

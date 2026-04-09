@@ -8,7 +8,7 @@ import { OctagonClient } from '../scan/octagon-client.js';
 import { createOctagonInvoker } from '../scan/invoker.js';
 import * as readline from 'node:readline';
 import { callKalshiApi, KalshiApiError } from '../tools/kalshi/api.js';
-import type { KalshiMarket, KalshiEvent, KalshiOrder } from '../tools/kalshi/types.js';
+import type { KalshiMarket, KalshiEvent, KalshiOrder, KalshiPosition } from '../tools/kalshi/types.js';
 import { openPosition } from '../db/positions.js';
 import { logTrade } from '../db/trades.js';
 import { formatRawReport, parseMarketProb, parsePriceField } from '../controllers/browse.js';
@@ -43,6 +43,8 @@ export interface AnalyzeData {
   reportAge: string | null;
   reportId: string;
   rawReport: string;
+  existingPosition?: { direction: 'yes' | 'no'; size: number } | null;
+  closePriceCents?: number | null;
 }
 
 
@@ -227,12 +229,52 @@ export async function handleAnalyze(ticker: string, refresh = false): Promise<An
   // Risk gate
   const gate = riskGate({ ticker: resolvedTicker, eventTicker, kelly, market, db });
 
-  // Build signal
+  // Check if user holds a position in this market
+  let existingPosition: { direction: 'yes' | 'no'; size: number } | null = null;
+  try {
+    const posData = await callKalshiApi('GET', '/portfolio/positions', {
+      params: { ticker: resolvedTicker },
+    });
+    const positions = (posData.market_positions ?? posData.positions ?? []) as KalshiPosition[];
+    const match = positions.find((p) => p.ticker === resolvedTicker);
+    if (match) {
+      const rawPos = parseFloat(String(match.position ?? '0'));
+      if (rawPos !== 0) {
+        existingPosition = {
+          direction: rawPos > 0 ? 'yes' : 'no',
+          size: Math.abs(Math.round(rawPos)),
+        };
+      }
+    }
+  } catch {
+    // Position fetch failed (e.g. demo mode) — continue without
+  }
+
+  // Build signal — position-aware
   const side = snapshot.edge > 0 ? 'YES' : 'NO';
   const yesAsk = parsePriceField(market.yes_ask_dollars, market.dollar_yes_ask, market.yes_ask);
   const noAsk = parsePriceField(market.no_ask_dollars, market.dollar_no_ask, market.no_ask);
+  const yesBid = parsePriceField(market.yes_bid_dollars, market.dollar_yes_bid, market.yes_bid);
+  const noBid = parsePriceField(market.no_bid_dollars, market.dollar_no_bid, market.no_bid);
   const entryPrice = (snapshot.edge > 0 ? yesAsk : noAsk);
-  const signal = Number.isFinite(entryPrice) ? `BUY ${side} @ $${entryPrice.toFixed(2)}` : `BUY ${side}`;
+
+  let signal: string;
+  if (existingPosition) {
+    const holdDir = existingPosition.direction.toUpperCase();
+    const edgeReversed =
+      (existingPosition.direction === 'yes' && snapshot.edge < -0.03) ||
+      (existingPosition.direction === 'no' && snapshot.edge > 0.03);
+    if (edgeReversed) {
+      const closePrice = existingPosition.direction === 'yes' ? yesBid : noBid;
+      signal = Number.isFinite(closePrice)
+        ? `SELL ${holdDir} @ $${closePrice.toFixed(2)} (close position)`
+        : `SELL ${holdDir} (close position)`;
+    } else {
+      signal = `HOLD (long ${holdDir} ×${existingPosition.size})`;
+    }
+  } else {
+    signal = Number.isFinite(entryPrice) ? `BUY ${side} @ $${entryPrice.toFixed(2)}` : `BUY ${side}`;
+  }
   const edgePp = `${snapshot.edge >= 0 ? '+' : ''}${(snapshot.edge * 100).toFixed(0)}pp`;
 
   const mispricingSignal = snapshot.edge > 0.02
@@ -279,6 +321,10 @@ export async function handleAnalyze(ticker: string, refresh = false): Promise<An
     reportAge,
     reportId: report.reportId,
     rawReport: report.rawResponse,
+    existingPosition,
+    closePriceCents: existingPosition
+      ? Math.round((existingPosition.direction === 'yes' ? yesBid : noBid) * 100) || null
+      : null,
   };
 }
 
@@ -295,6 +341,9 @@ export function formatAnalyzeHuman(data: AnalyzeData): string {
     lines.push(`  Expires:    ${exp.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} ${exp.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZoneName: 'short' })}`);
   }
   lines.push(`  Signal:     ${data.signal}`);
+  if (data.existingPosition) {
+    lines.push(`  Position:   ${data.existingPosition.direction.toUpperCase()} ×${data.existingPosition.size}`);
+  }
   lines.push('');
 
   // Edge & Probabilities
@@ -433,6 +482,50 @@ export async function promptAnalyzeActions(data: AnalyzeData): Promise<void> {
       }
 
       case '3': {
+        // Determine if this is a SELL (close position) or BUY (open position)
+        const isSell = data.signal.startsWith('SELL');
+        const isHold = data.signal.startsWith('HOLD');
+
+        if (isHold) {
+          console.log('  Signal is HOLD — no trade suggested.');
+          break;
+        }
+
+        if (isSell && data.existingPosition) {
+          // Close position: sell what we hold
+          const sellSide = data.existingPosition.direction;
+          const sellSize = data.existingPosition.size;
+          const closePrice = data.closePriceCents ?? Math.round(
+            (sellSide === 'yes' ? data.marketProb : 1 - data.marketProb) * 100
+          );
+
+          console.log(`  Signal: SELL ${sellSize} ${sellSide.toUpperCase()} @ ${closePrice}¢ (close position)`);
+          const confirm = await ask('  Execute? [y/n] ');
+          if (confirm.toLowerCase() !== 'y' && confirm.toLowerCase() !== 'yes') {
+            console.log('  Trade cancelled.');
+            break;
+          }
+
+          try {
+            const orderPayload: Record<string, unknown> = {
+              ticker: data.ticker,
+              action: 'sell',
+              side: sellSide,
+              type: 'limit',
+              count: sellSize,
+            };
+            if (sellSide === 'yes') orderPayload.yes_price = closePrice;
+            else orderPayload.no_price = closePrice;
+
+            const orderRes = await callKalshiApi('POST', '/portfolio/orders', { body: orderPayload });
+            const order = (orderRes.order ?? orderRes) as KalshiOrder;
+            console.log(`  Sell order placed: ${order.order_id} (${order.status})`);
+          } catch (err) {
+            console.error(`  Trade failed: ${err instanceof Error ? err.message : String(err)}`);
+          }
+          break;
+        }
+
         if (!data.riskGate.passed) {
           console.log('  Risk gate FAILED — trade blocked.');
           break;
