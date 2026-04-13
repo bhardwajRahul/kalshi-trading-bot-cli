@@ -64,13 +64,14 @@ export async function discoverSettledMarkets(
   db: Database,
   opts?: { category?: string; from?: string; to?: string },
 ): Promise<SettledMarket[]> {
-  let query = `SELECT DISTINCT event_ticker, series_category as category, mutually_exclusive as me
+  let query = `SELECT event_ticker, MAX(series_category) as category, MAX(mutually_exclusive) as me
     FROM octagon_reports r WHERE variant_used = 'events-api' AND has_history = 1`;
   const params: Record<string, string> = {};
   if (opts?.category) {
     query += ' AND LOWER(series_category) LIKE $cat';
     params.$cat = `%${opts.category.toLowerCase()}%`;
   }
+  query += ' GROUP BY event_ticker';
 
   const events = db.query(query).all(params) as Array<{ event_ticker: string; category: string | null; me: number }>;
   // Normalize date-only strings: fromDate → start of day, toDate → end of day
@@ -122,13 +123,14 @@ export async function discoverOpenMarkets(
   db: Database,
   opts?: { category?: string },
 ): Promise<OpenMarket[]> {
-  let query2 = `SELECT DISTINCT event_ticker, series_category as category, mutually_exclusive as me
+  let query2 = `SELECT event_ticker, MAX(series_category) as category, MAX(mutually_exclusive) as me
     FROM octagon_reports r WHERE variant_used = 'events-api'`;
   const params2: Record<string, string> = {};
   if (opts?.category) {
     query2 += ' AND LOWER(series_category) LIKE $cat';
     params2.$cat = `%${opts.category.toLowerCase()}%`;
   }
+  query2 += ' GROUP BY event_ticker';
 
   const events2 = db.query(query2).all(params2) as Array<{ event_ticker: string; category: string | null; me: number }>;
 
