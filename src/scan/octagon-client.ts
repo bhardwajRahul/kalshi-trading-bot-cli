@@ -283,11 +283,34 @@ export class OctagonClient {
     const versions = parsed.versions as Array<Record<string, unknown>> | undefined;
     const source = versions?.[0] ?? parsed;
 
-    // Octagon JSON API returns probabilities as percentages (0-100), not fractions.
-    // Use toProbFromJson which always divides by 100, unlike toProb which uses a
+    // For multi-outcome events, look up this specific market's probability
+    // from outcome_probabilities_json before falling back to event-level values.
+    // The event-level model_probability is typically the first outcome's value,
+    // not the one for the market we're analyzing.
+    let modelProb: number | null = null;
+    let marketProb: number | null = null;
+    const outcomeJson = (source as Record<string, unknown>).outcome_probabilities_json;
+    if (outcomeJson != null) {
+      try {
+        const outcomes = typeof outcomeJson === 'string'
+          ? JSON.parse(outcomeJson) : outcomeJson;
+        if (Array.isArray(outcomes)) {
+          const match = outcomes.find(
+            (o: { market_ticker?: string }) => String(o.market_ticker).toUpperCase() === defaults.ticker.toUpperCase()
+          );
+          if (match) {
+            modelProb = this.toProbFromJson(match.model_probability);
+            marketProb = this.toProbFromJson(match.market_probability);
+          }
+        }
+      } catch { /* malformed outcome JSON — fall through */ }
+    }
+
+    // Fall back to event-level values (correct for single-outcome markets).
+    // Uses toProbFromJson which always divides by 100, unlike toProb which uses a
     // > 1 heuristic that fails for sub-1% values (e.g. 0.9% stays as 0.9 → 90%).
-    const modelProb = this.toProbFromJson(source.modelProb ?? source.model_prob ?? source.model_probability) ?? defaults.modelProb;
-    const marketProb = this.toProbFromJson(source.marketProb ?? source.market_prob ?? source.market_probability) ?? defaults.marketProb;
+    modelProb = modelProb ?? this.toProbFromJson(source.modelProb ?? source.model_prob ?? source.model_probability) ?? defaults.modelProb;
+    marketProb = marketProb ?? this.toProbFromJson(source.marketProb ?? source.market_prob ?? source.market_probability) ?? defaults.marketProb;
 
     return {
       ...defaults,
