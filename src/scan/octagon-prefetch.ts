@@ -133,22 +133,19 @@ export async function prefetchOctagonEvents(db: Database): Promise<{ inserted: n
     }
   }
 
-  // Mark which events have historical snapshots available
-  try {
-    const eventsWithHistory = await fetchAllOctagonEvents({ hasHistory: true });
-    const historyTickers = new Set(eventsWithHistory.map(e => e.event_ticker));
-    const markHistory = db.prepare(
-      "UPDATE octagon_reports SET has_history = 1 WHERE event_ticker = $et AND variant_used = 'events-api'",
-    );
-    db.transaction(() => {
-      for (const et of historyTickers) {
-        markHistory.run({ $et: et });
-      }
-    })();
-    logger.info(`[octagon-prefetch] Marked ${historyTickers.size} events with history`);
-  } catch (err) {
-    logger.warn(`[octagon-prefetch] Failed to mark has_history: ${err instanceof Error ? err.message : err}`);
-  }
+  // Mark has_history directly from the response field (no second API call needed)
+  const markHistory = db.prepare(
+    "UPDATE octagon_reports SET has_history = $hh WHERE event_ticker = $et AND variant_used = 'events-api'",
+  );
+  let historyCount = 0;
+  db.transaction(() => {
+    for (const event of events) {
+      const hh = event.has_history ? 1 : 0;
+      markHistory.run({ $et: event.event_ticker, $hh: hh });
+      if (hh) historyCount++;
+    }
+  })();
+  logger.info(`[octagon-prefetch] Marked ${historyCount}/${events.length} events with history`);
 
   markPrefetchDone(db);
   logger.info(`[octagon-prefetch] Done: ${inserted} inserted, ${skipped} skipped (${events.length} total events)`);

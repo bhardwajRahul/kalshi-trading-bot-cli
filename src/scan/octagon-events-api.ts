@@ -26,6 +26,7 @@ export interface OctagonEventEntry {
   total_open_interest: number;
   close_time: string;
   key_takeaway: string;
+  has_history?: boolean;
   current_state_summary_richtext?: string;
   short_answer_richtext?: string;
   executive_summary_richtext?: string;
@@ -45,6 +46,8 @@ const TIMEOUT_MS = 60_000;
  * Fetch all events from the Octagon Prediction Markets Events API,
  * paginating through all pages.
  * @param opts.hasHistory - When true, only return events with multiple historical snapshots.
+ *   Note: The events list endpoint now returns `has_history` per event, so this filter
+ *   is only needed if you want to reduce response size.
  */
 export async function fetchAllOctagonEvents(opts?: { hasHistory?: boolean }): Promise<OctagonEventEntry[]> {
   const apiKey = process.env.OCTAGON_API_KEY;
