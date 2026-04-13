@@ -133,6 +133,23 @@ export async function prefetchOctagonEvents(db: Database): Promise<{ inserted: n
     }
   }
 
+  // Mark which events have historical snapshots available
+  try {
+    const eventsWithHistory = await fetchAllOctagonEvents({ hasHistory: true });
+    const historyTickers = new Set(eventsWithHistory.map(e => e.event_ticker));
+    const markHistory = db.prepare(
+      "UPDATE octagon_reports SET has_history = 1 WHERE event_ticker = $et AND variant_used = 'events-api'",
+    );
+    db.transaction(() => {
+      for (const et of historyTickers) {
+        markHistory.run({ $et: et });
+      }
+    })();
+    logger.info(`[octagon-prefetch] Marked ${historyTickers.size} events with history`);
+  } catch (err) {
+    logger.warn(`[octagon-prefetch] Failed to mark has_history: ${err instanceof Error ? err.message : err}`);
+  }
+
   markPrefetchDone(db);
   logger.info(`[octagon-prefetch] Done: ${inserted} inserted, ${skipped} skipped (${events.length} total events)`);
   return { inserted, skipped };

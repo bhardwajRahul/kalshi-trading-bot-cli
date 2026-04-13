@@ -44,8 +44,9 @@ const TIMEOUT_MS = 60_000;
 /**
  * Fetch all events from the Octagon Prediction Markets Events API,
  * paginating through all pages.
+ * @param opts.hasHistory - When true, only return events with multiple historical snapshots.
  */
-export async function fetchAllOctagonEvents(): Promise<OctagonEventEntry[]> {
+export async function fetchAllOctagonEvents(opts?: { hasHistory?: boolean }): Promise<OctagonEventEntry[]> {
   const apiKey = process.env.OCTAGON_API_KEY;
   if (!apiKey) throw new Error('OCTAGON_API_KEY not set');
 
@@ -55,6 +56,7 @@ export async function fetchAllOctagonEvents(): Promise<OctagonEventEntry[]> {
 
   do {
     const params = new URLSearchParams({ limit: String(PAGE_LIMIT) });
+    if (opts?.hasHistory) params.set('has_history', 'true');
     if (cursor) params.set('cursor', cursor);
 
     const controller = new AbortController();

@@ -10,6 +10,7 @@ import { handleAlerts, formatAlertsHuman } from './alerts.js';
 import { handleStatus } from './status.js';
 import { handleThemes, formatThemesHuman } from './themes.js';
 import { handleWatch } from './watch.js';
+import { handleBacktest, formatBacktestHuman } from './backtest.js';
 import { callKalshiApi } from '../tools/kalshi/api.js';
 import {
   formatBalance,
@@ -229,6 +230,20 @@ export async function dispatch(args: ParsedArgs): Promise<void> {
       }
       // Theme scan mode (existing behavior)
       await handleWatch(args);
+      return;
+    }
+
+    // ─── backtest ──────────────────────────────────────────────────────
+    if (resolved.canonical === 'backtest') {
+      const resp = await handleBacktest(args);
+      if (json) {
+        console.log(JSON.stringify(resp));
+      } else if (resp.ok && resp.data) {
+        console.log(formatBacktestHuman(resp.data));
+      } else {
+        console.error(resp.error?.message ?? 'Backtest failed');
+      }
+      process.exit(resp.ok ? ExitCode.SUCCESS : ExitCode.USER_ERROR);
       return;
     }
 

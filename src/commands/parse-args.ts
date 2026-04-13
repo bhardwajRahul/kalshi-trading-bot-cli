@@ -5,6 +5,8 @@ const SUBCOMMANDS = [
   // Legacy aliases (kept for backward compat)
   'edge',
   'alerts', 'config', 'clear-cache', 'chat', 'init', 'status', 'themes',
+  // Backtest
+  'backtest',
 ] as const;
 
 export type Subcommand = (typeof SUBCOMMANDS)[number];
@@ -26,6 +28,14 @@ export interface ParsedArgs {
   dryRun: boolean;
   verbose: boolean;
   performance: boolean;
+  // Backtest-specific
+  resolved: boolean;
+  unresolved: boolean;
+  from?: string;
+  to?: string;
+  category?: string;
+  minHoursBeforeClose?: number;
+  exportPath?: string;
   parseErrors: string[];
 }
 
@@ -46,6 +56,13 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): ParsedArgs {
   let dryRun = false;
   let verbose = false;
   let performance = false;
+  let resolved = false;
+  let unresolved = false;
+  let from: string | undefined;
+  let to: string | undefined;
+  let category: string | undefined;
+  let minHoursBeforeClose: number | undefined;
+  let exportPath: string | undefined;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -128,6 +145,29 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): ParsedArgs {
       verbose = true;
     } else if (arg === '--performance') {
       performance = true;
+    } else if (arg === '--resolved') {
+      resolved = true;
+    } else if (arg === '--unresolved') {
+      unresolved = true;
+    } else if (arg === '--from') {
+      const val = argv[++i];
+      if (val != null) { from = val; } else { parseErrors.push('--from requires a value'); }
+    } else if (arg === '--to') {
+      const val = argv[++i];
+      if (val != null) { to = val; } else { parseErrors.push('--to requires a value'); }
+    } else if (arg === '--category') {
+      const val = argv[++i];
+      if (val != null) { category = val; } else { parseErrors.push('--category requires a value'); }
+    } else if (arg === '--min-hours-before-close') {
+      const raw = argv[++i];
+      if (raw != null) {
+        const numeric = Number(raw);
+        if (Number.isFinite(numeric) && numeric >= 0) { minHoursBeforeClose = numeric; }
+        else { parseErrors.push(`Invalid --min-hours-before-close value: "${raw}"`); }
+      } else { parseErrors.push('--min-hours-before-close requires a value'); }
+    } else if (arg === '--export') {
+      const val = argv[++i];
+      if (val != null) { exportPath = val; } else { parseErrors.push('--export requires a value'); }
     } else if (arg.startsWith('--')) {
       parseErrors.push(`Unknown flag: ${arg}`);
     } else {
@@ -146,5 +186,5 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): ParsedArgs {
     positionalArgs.unshift(first);
   }
 
-  return { subcommand, positionalArgs, json, theme, ticker, interval, since, minConfidence, minEdge, side, live, refresh, report, dryRun, verbose, performance, parseErrors };
+  return { subcommand, positionalArgs, json, theme, ticker, interval, since, minConfidence, minEdge, side, live, refresh, report, dryRun, verbose, performance, resolved, unresolved, from, to, category, minHoursBeforeClose, exportPath, parseErrors };
 }
