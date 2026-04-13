@@ -3,6 +3,8 @@ import { mkdirSync } from 'fs';
 import { dirname } from 'path';
 import { migrate } from './schema.js';
 import { appPath } from '../utils/paths.js';
+import { prefetchOctagonEvents } from '../scan/octagon-prefetch.js';
+import { logger } from '../utils/logger.js';
 
 let _db: Database | null = null;
 
@@ -25,6 +27,12 @@ export function getDb(path?: string): Database {
   _db.exec('PRAGMA journal_mode = WAL');
   _db.exec('PRAGMA foreign_keys = ON');
   migrate(_db);
+
+  // Fire-and-forget: prefetch Octagon events in background
+  const db = _db;
+  prefetchOctagonEvents(db).catch((err) => {
+    logger.warn(`[octagon-prefetch] ${err instanceof Error ? err.message : err}`);
+  });
 
   return _db;
 }
