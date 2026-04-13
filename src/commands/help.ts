@@ -81,6 +81,23 @@ Side defaults to YES if omitted.`,
 
 ${p}cancel <order_id>`,
 
+    backtest: `**${p}backtest** — Model accuracy scorecard & live edge scanner
+
+${p}backtest                              Both resolved + unresolved (default)
+${p}backtest --resolved                   Resolved only (scorecard)
+${p}backtest --unresolved                 Unresolved only (live edge scanner)
+${p}backtest --category crypto            Filter by category
+${p}backtest --from 2026-01-01 --to 2026-03-31
+${p}backtest --min-hours-before-close 48  Custom lead time (resolved)
+${p}backtest --min-edge 10                Stricter edge threshold (pp)
+${p}backtest --snapshot last              Use latest snapshot (no lead time)
+${p}backtest --export results.csv         Per-market detail CSV
+${p}backtest --json                       Machine-readable output
+
+Resolved: measures Brier accuracy, skill score, edge hit rate, and flat-bet P&L
+on settled markets using Octagon snapshots from ≥24h before close.
+Unresolved: ranks open markets by current model-vs-market edge.`,
+
     'clear-cache': `**${ctx === 'cli' ? '' : 'bun start '}clear-cache** — Delete local cache
 
 ${ctx === 'cli' ? `${p}` : 'bun start '}clear-cache                Delete the local SQLite database (~/.kalshi-bot/kalshi-bot.db)
@@ -125,6 +142,11 @@ Analysis & Trading:
   sell <ticker> <n> [price] [yes|no]  Sell contracts
   cancel <order_id>                   Cancel a resting order
 
+Analysis:
+  backtest                      Model accuracy scorecard + live edge scanner
+  backtest --resolved           Resolved markets scorecard only
+  backtest --unresolved         Live edge scanner only
+
 Account:
   portfolio                     Overview: positions, P&L, risk snapshot
   portfolio positions           Open positions
@@ -138,6 +160,7 @@ System:
   help [command]                Show help for a command
 
 Flags: --json, --refresh, --performance, --dry-run, --verbose
+Backtest flags: --resolved, --unresolved, --category, --from, --to, --min-edge, --export
 Run "kalshi help <command>" for detailed usage.`;
   }
 
@@ -156,7 +179,8 @@ Discovery:
   /watch --theme <theme>         Continuous theme scan (Esc to stop)
   /watch --refresh               Force index rebuild before watching
 
-Analysis & Trading:
+Analysis:
+  /backtest                      Model accuracy scorecard + live edge scanner
   /analyze <ticker>              Full report: edge, drivers, Kelly sizing
   /analyze <ticker> refresh      Force fresh Octagon report
   /buy <ticker> <n> [price] [yes|no]   Buy contracts (price in cents)
