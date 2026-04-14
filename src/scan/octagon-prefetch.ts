@@ -67,41 +67,43 @@ function persistEvent(db: Database, event: OctagonEventEntry): boolean {
   const ttl = getTtlForCloseTime(Math.max(0, closeTime - capturedAt));
   const reportId = `events-api-${event.event_ticker}-${capturedAt}`;
 
-  insertReport(db, {
-    report_id: reportId,
-    ticker: event.event_ticker,
-    event_ticker: event.event_ticker,
-    model_prob: modelProb,
-    market_prob: marketProb,
-    mispricing_signal: inferSignal(modelProb, marketProb),
-    drivers_json: JSON.stringify([{
-      claim: event.key_takeaway || event.name,
-      category: (event.series_category || 'other').toLowerCase(),
-      impact: 'medium',
-    }]),
-    catalysts_json: null,
-    sources_json: null,
-    resolution_history_json: null,
-    contract_snapshot_json: null,
-    raw_response: null,
-    variant_used: 'events-api',
-    fetched_at: capturedAt,
-    expires_at: capturedAt + ttl,
-  });
+  // Insert report and set metadata in a single transaction
+  db.transaction(() => {
+    insertReport(db, {
+      report_id: reportId,
+      ticker: event.event_ticker,
+      event_ticker: event.event_ticker,
+      model_prob: modelProb,
+      market_prob: marketProb,
+      mispricing_signal: inferSignal(modelProb, marketProb),
+      drivers_json: JSON.stringify([{
+        claim: event.key_takeaway || event.name,
+        category: (event.series_category || 'other').toLowerCase(),
+        impact: 'medium',
+      }]),
+      catalysts_json: null,
+      sources_json: null,
+      resolution_history_json: null,
+      contract_snapshot_json: null,
+      raw_response: null,
+      variant_used: 'events-api',
+      fetched_at: capturedAt,
+      expires_at: capturedAt + ttl,
+    });
 
-  // Set metadata fields atomically on this specific report
-  db.prepare(
-    `UPDATE octagon_reports SET has_history = $hh, mutually_exclusive = $me, series_category = $sc,
-       confidence_score = $cs, outcome_probabilities_json = $opj
-     WHERE report_id = $rid`,
-  ).run({
-    $rid: reportId,
-    $hh: event.has_history ? 1 : 0,
-    $me: event.mutually_exclusive ? 1 : 0,
-    $sc: event.series_category ?? null,
-    $cs: event.confidence_score ?? null,
-    $opj: event.outcome_probabilities ? JSON.stringify(event.outcome_probabilities) : null,
-  });
+    db.prepare(
+      `UPDATE octagon_reports SET has_history = $hh, mutually_exclusive = $me, series_category = $sc,
+         confidence_score = $cs, outcome_probabilities_json = $opj
+       WHERE report_id = $rid`,
+    ).run({
+      $rid: reportId,
+      $hh: event.has_history ? 1 : 0,
+      $me: event.mutually_exclusive ? 1 : 0,
+      $sc: event.series_category ?? null,
+      $cs: event.confidence_score ?? null,
+      $opj: event.outcome_probabilities ? JSON.stringify(event.outcome_probabilities) : null,
+    });
+  })();
 
   // Also persist to edge_history
   const edge = modelProb - marketProb;

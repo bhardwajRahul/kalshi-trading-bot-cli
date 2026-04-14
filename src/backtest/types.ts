@@ -3,7 +3,7 @@ export interface BacktestOpts {
   resolvedOnly: boolean;
   unresolvedOnly: boolean;
   category?: string;
-  minEdge: number;            // 0-1 scale (e.g., 0.05 = 5pp)
+  minEdge: number;            // fractional (0-1 scale), converted to pp by caller (e.g., 0.05 → 5pp)
   exportPath?: string;
 }
 
