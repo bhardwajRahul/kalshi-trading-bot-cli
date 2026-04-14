@@ -79,6 +79,7 @@ Type help for commands, or just ask a question.
 | `buy <ticker> <count> [price] [yes\|no]` | Buy contracts |
 | `sell <ticker> <count> [price] [yes\|no]` | Sell contracts |
 | `cancel <order_id>` | Cancel a resting order |
+| `backtest` | Model accuracy scorecard + live edge scanner |
 | `portfolio` | Positions, P&L, risk snapshot |
 | `setup` | Re-run setup wizard (inside TUI) |
 | `init` | Launch setup wizard from CLI (`bun start init`) |
@@ -97,6 +98,53 @@ Type help for commands, or just ask a question.
 | `--min-edge <n>` | Minimum edge threshold |
 | `--interval <min>` | Scan interval in minutes (watch) |
 | `--live` | Force 15m scan interval (watch) |
+| `--resolved` | Resolved markets only (backtest) |
+| `--unresolved` | Open markets only (backtest) |
+| `--category <cat>` | Filter by category (backtest) |
+| `--from <date>` | Start date for date range (backtest) |
+| `--to <date>` | End date for date range (backtest) |
+| `--min-hours-before-close <n>` | Snapshot lead time in hours (backtest, default 24) |
+| `--snapshot last` | Use latest snapshot, no lead time (backtest) |
+| `--export <path>` | Export per-market CSV (backtest) |
+
+### Backtesting
+
+Does the model find real edge? The `backtest` command answers this with two views:
+
+- **Resolved** — measures model accuracy vs. market accuracy on settled markets using Brier scores, then checks if the edge signals paid off with flat-bet P&L.
+- **Unresolved** — shows where the model currently sees edge on open markets, ranked by size.
+
+```bash
+bun start backtest                              # both views (default)
+bun start backtest --resolved                   # scorecard only
+bun start backtest --unresolved --min-edge 10   # live edge scanner (10pp threshold)
+bun start backtest --category crypto            # filter by category
+bun start backtest --from 2026-01-01 --to 2026-03-31
+bun start backtest --export results.csv         # per-market detail
+```
+
+```
+Octagon Backtest — 2025-01-01 – 2026-04-14
+═══════════════════════════════════════
+
+RESOLVED — Model Scorecard
+──────────────────────────
+VERDICT: Model shows edge (Skill +8.4% [CI: +0.7%, +15.7%]; ROI +13.8%)
+
+  Markets        1553  (82 events)
+  Brier (Octagon)   0.085
+  Brier (Market)    0.093
+  Skill Score       +8.4%  [95% CI: 0.7% to 15.7%]
+  Hit rate          68.2%   [95% CI: 63.2% to 73.2%]
+  Flat-bet P&L      +$46.85 (ROI: +13.8%)
+
+UNRESOLVED — Live Edge Scanner (min edge: 5pp)
+──────────────────────────────────────────────
+  Ticker                    Model   Market   Edge     Dir    Conf      Closes
+  KXIPODISCORD-26SEP01        88%       7%   +81pp   YES ▲   med     140 days
+  KXUSDBRLMAX-26DEC31-T5.7    82%       3%   +79pp   YES ▲   high    262 days
+  ...
+```
 
 ### Demo Mode
 
