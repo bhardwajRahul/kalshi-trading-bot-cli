@@ -49,7 +49,7 @@ function buildEventQuery(
   extraWhere: string,
   category?: string,
 ): { query: string; params: Record<string, string> } {
-  let query = `SELECT event_ticker, MAX(series_category) as category, MAX(mutually_exclusive) as me
+  let query = `SELECT event_ticker, MAX(series_category) as category
     FROM octagon_reports r WHERE variant_used = 'events-api'${extraWhere}`;
   const params: Record<string, string> = {};
   if (category) {
@@ -83,7 +83,7 @@ export async function discoverSettledMarkets(
   opts?: { category?: string; from?: string; to?: string },
 ): Promise<SettledMarket[]> {
   const { query, params } = buildEventQuery(' AND has_history = 1', opts?.category);
-  const events = db.query(query).all(params) as Array<{ event_ticker: string; category: string | null; me: number }>;
+  const events = db.query(query).all(params) as Array<{ event_ticker: string; category: string | null }>;
   // Normalize date-only strings: fromDate → start of day, toDate → end of day
   const isDateOnly = /^\d{4}-\d{2}-\d{2}$/;
   const fromDate = opts?.from ? new Date(opts.from) : null;
@@ -130,7 +130,7 @@ export async function discoverOpenMarkets(
   opts?: { category?: string },
 ): Promise<OpenMarket[]> {
   const { query: q2, params: p2 } = buildEventQuery('', opts?.category);
-  const events2 = db.query(q2).all(p2) as Array<{ event_ticker: string; category: string | null; me: number }>;
+  const events2 = db.query(q2).all(p2) as Array<{ event_ticker: string; category: string | null }>;
 
   const batchResults = await parallelMap(events2, async ({ event_ticker, category: cat }) => {
     const markets = await fetchEventMarkets(event_ticker);

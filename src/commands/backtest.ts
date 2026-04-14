@@ -63,39 +63,39 @@ export async function handleBacktest(args: ParsedArgs): Promise<CLIResponse<Back
       }
 
       for (const [eventTicker, markets] of byEvent) {
+        // Fetch full history (no capturedTo) so the cache is used on repeat runs
+        let snapshots;
         try {
-          const snapshots = await fetchAndCacheHistory(db, eventTicker, {
-            capturedTo: markets[0].close_time,
+          snapshots = await fetchAndCacheHistory(db, eventTicker);
+        } catch {
+          continue; // History fetch failed — skip this event
+        }
+
+        for (const m of markets) {
+          const snap = selectSnapshot(snapshots, m.close_time, minHours);
+          if (!snap) continue;
+
+          // Use per-market probability from outcome_probabilities if available
+          const perMarket = findOutcomeProb(snap.outcome_probabilities, m.ticker);
+          const modelProb = perMarket?.modelProb ?? snap.model_probability / 100;
+          const marketProb = perMarket?.marketProb ?? snap.market_probability / 100;
+
+          const closeEpoch = new Date(m.close_time).getTime();
+          const snapEpoch = new Date(snap.captured_at).getTime();
+          const hoursBefore = (closeEpoch - snapEpoch) / (3600 * 1000);
+
+          resolvedMarkets.push({
+            ticker: m.ticker,
+            event_ticker: m.event_ticker,
+            model_prob: modelProb,
+            market_prob: marketProb,
+            edge_pp: Math.round((modelProb - marketProb) * 1000) / 10,
+            hours_before_close: hoursBefore,
+            confidence_score: snap.confidence_score ?? 0,
+            series_category: m.series_category,
+            outcome: m.result === 'yes' ? 1 : 0,
+            close_time: m.close_time,
           });
-
-          for (const m of markets) {
-            const snap = selectSnapshot(snapshots, m.close_time, minHours);
-            if (!snap) continue;
-
-            // Use per-market probability from outcome_probabilities if available
-            const perMarket = findOutcomeProb(snap.outcome_probabilities, m.ticker);
-            const modelProb = perMarket?.modelProb ?? snap.model_probability / 100;
-            const marketProb = perMarket?.marketProb ?? snap.market_probability / 100;
-
-            const closeEpoch = new Date(m.close_time).getTime();
-            const snapEpoch = new Date(snap.captured_at).getTime();
-            const hoursBefore = (closeEpoch - snapEpoch) / (3600 * 1000);
-
-            resolvedMarkets.push({
-              ticker: m.ticker,
-              event_ticker: m.event_ticker,
-              model_prob: modelProb,
-              market_prob: marketProb,
-              edge_pp: Math.round((modelProb - marketProb) * 1000) / 10,
-              hours_before_close: hoursBefore,
-              confidence_score: snap.confidence_score ?? 0,
-              series_category: m.series_category,
-              outcome: m.result === 'yes' ? 1 : 0,
-              close_time: m.close_time,
-            });
-          }
-        } catch (err) {
-          // History fetch failed for this event — skip
         }
       }
 

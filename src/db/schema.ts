@@ -175,6 +175,7 @@ export function migrate(db: Database): void {
       series_category     TEXT,
       close_time          TEXT,
       name                TEXT,
+      outcome_probabilities_json TEXT,
       UNIQUE(event_ticker, history_id)
     );
 

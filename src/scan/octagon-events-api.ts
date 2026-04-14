@@ -59,7 +59,6 @@ export async function fetchAllOctagonEvents(opts?: { hasHistory?: boolean }): Pr
 
   const all: OctagonEventEntry[] = [];
   let cursor: string | null = null;
-  let pageNum = 0;
 
   do {
     const params = new URLSearchParams({ limit: String(PAGE_LIMIT) });
@@ -98,7 +97,6 @@ export async function fetchAllOctagonEvents(opts?: { hasHistory?: boolean }): Pr
     }
     all.push(...(p.data as OctagonEventEntry[]));
     cursor = hasMore ? (p.next_cursor as string) : null;
-    pageNum++;
   } while (cursor);
 
   return all;

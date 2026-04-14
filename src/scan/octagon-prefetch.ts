@@ -89,6 +89,20 @@ function persistEvent(db: Database, event: OctagonEventEntry): boolean {
     expires_at: capturedAt + ttl,
   });
 
+  // Set metadata fields atomically on this specific report
+  db.prepare(
+    `UPDATE octagon_reports SET has_history = $hh, mutually_exclusive = $me, series_category = $sc,
+       confidence_score = $cs, outcome_probabilities_json = $opj
+     WHERE report_id = $rid`,
+  ).run({
+    $rid: reportId,
+    $hh: event.has_history ? 1 : 0,
+    $me: event.mutually_exclusive ? 1 : 0,
+    $sc: event.series_category ?? null,
+    $cs: event.confidence_score ?? null,
+    $opj: event.outcome_probabilities ? JSON.stringify(event.outcome_probabilities) : null,
+  });
+
   // Also persist to edge_history
   const edge = modelProb - marketProb;
   try {
@@ -140,24 +154,6 @@ export async function prefetchOctagonEvents(db: Database): Promise<{ inserted: n
       skipped++;
     }
   }
-
-  // Mark has_history, mutually_exclusive, series_category from the response
-  const markMeta = db.prepare(
-    `UPDATE octagon_reports SET has_history = $hh, mutually_exclusive = $me, series_category = $sc, confidence_score = $cs, outcome_probabilities_json = $opj
-     WHERE event_ticker = $et AND variant_used = 'events-api'`,
-  );
-  db.transaction(() => {
-    for (const event of events) {
-      markMeta.run({
-        $et: event.event_ticker,
-        $hh: event.has_history ? 1 : 0,
-        $me: event.mutually_exclusive ? 1 : 0,
-        $sc: event.series_category ?? null,
-        $cs: event.confidence_score ?? null,
-        $opj: event.outcome_probabilities ? JSON.stringify(event.outcome_probabilities) : null,
-      });
-    }
-  })();
 
   markPrefetchDone(db);
   return { inserted, skipped };
