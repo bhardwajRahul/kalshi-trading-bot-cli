@@ -16,7 +16,7 @@ function defaultArgs(overrides: Partial<ParsedArgs>): ParsedArgs {
     subcommand: 'chat', positionalArgs: [], json: false,
     live: false, refresh: false, report: false, dryRun: false,
     verbose: false, performance: false, resolved: false,
-    unresolved: false, snapshotLast: false, parseErrors: [],
+    unresolved: false, parseErrors: [],
     ...overrides,
   };
 }
@@ -103,25 +103,17 @@ export async function handleSlashCommand(input: string): Promise<CommandResult |
         if (a === '--resolved') btArgs.resolved = true;
         else if (a === '--unresolved') btArgs.unresolved = true;
         else if (a === '--category') btArgs.category = args[++i];
-        else if (a === '--from') btArgs.from = args[++i];
-        else if (a === '--to') btArgs.to = args[++i];
+        else if (a === '--days') { const v = Number(args[++i]); if (Number.isFinite(v) && v > 0) btArgs.days = v; }
         else if (a === '--min-edge') { const v = Number(args[++i]?.replace('%', '')); if (Number.isFinite(v)) btArgs.minEdge = v / 100; }
-        else if (a === '--min-hours-before-close') { const v = Number(args[++i]); if (Number.isFinite(v)) btArgs.minHoursBeforeClose = v; }
-        else if (a === '--snapshot' && args[i + 1] === 'last') { btArgs.snapshotLast = true; i++; }
       }
       const mode = btArgs.resolved ? 'resolved markets' : btArgs.unresolved ? 'open markets' : 'resolved + open markets';
-      // Return a progress message immediately, then run the backtest
-      // The caller (cli.ts) will show this while the spinner is active
+      const daysLabel = btArgs.days ?? 30;
       return {
-        output: `Running backtest on ${mode}...`,
+        output: `Running ${daysLabel}-day backtest on ${mode}...`,
         asyncFollowUp: async () => {
           const resp = await handleBacktest(defaultArgs(btArgs));
           if (!resp.ok || !resp.data) return resp.error?.message ?? 'Backtest failed';
-          return formatBacktestHuman(resp.data, {
-            minEdge: btArgs.minEdge ?? 0.05,
-            minHoursBeforeClose: btArgs.minHoursBeforeClose ?? 24,
-            snapshotLast: btArgs.snapshotLast,
-          });
+          return formatBacktestHuman(resp.data, { minEdge: btArgs.minEdge ?? 0.05 });
         },
       };
     }

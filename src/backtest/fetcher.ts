@@ -166,25 +166,23 @@ export async function fetchAndCacheHistory(
 }
 
 /**
- * Select the appropriate snapshot for backtesting a resolved market.
- * Returns the last snapshot captured >= minHours before market close.
+ * Select the snapshot closest to a target date (N days ago).
+ * Returns the last snapshot captured on or before the target date.
  * Probabilities in the returned snapshot are percentages (0-100).
  */
-export function selectSnapshot(
+export function selectSnapshotByDate(
   snapshots: HistorySnapshot[],
-  closeTime: string,
-  minHoursBeforeClose: number,
+  targetDate: Date,
 ): HistorySnapshot | null {
-  const closeEpoch = new Date(closeTime).getTime();
-  const cutoff = closeEpoch - minHoursBeforeClose * 3600 * 1000;
+  const targetEpoch = targetDate.getTime();
 
   let best: HistorySnapshot | null = null;
+  let bestEpoch = -Infinity;
   for (const s of snapshots) {
     const capturedEpoch = new Date(s.captured_at).getTime();
-    if (capturedEpoch <= cutoff) {
-      if (!best || capturedEpoch > new Date(best.captured_at).getTime()) {
-        best = s;
-      }
+    if (capturedEpoch <= targetEpoch && capturedEpoch > bestEpoch) {
+      best = s;
+      bestEpoch = capturedEpoch;
     }
   }
   return best;

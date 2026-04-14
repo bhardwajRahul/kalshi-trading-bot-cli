@@ -31,11 +31,10 @@ export interface ParsedArgs {
   // Backtest-specific
   resolved: boolean;
   unresolved: boolean;
+  days?: number;
   from?: string;
   to?: string;
   category?: string;
-  minHoursBeforeClose?: number;
-  snapshotLast: boolean;
   exportPath?: string;
   parseErrors: string[];
 }
@@ -59,11 +58,10 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): ParsedArgs {
   let performance = false;
   let resolved = false;
   let unresolved = false;
+  let days: number | undefined;
   let from: string | undefined;
   let to: string | undefined;
   let category: string | undefined;
-  let minHoursBeforeClose: number | undefined;
-  let snapshotLast = false;
   let exportPath: string | undefined;
 
   for (let i = 0; i < argv.length; i++) {
@@ -160,18 +158,13 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): ParsedArgs {
     } else if (arg === '--category') {
       const val = argv[++i];
       if (val != null) { category = val; } else { parseErrors.push('--category requires a value'); }
-    } else if (arg === '--min-hours-before-close') {
+    } else if (arg === '--days') {
       const raw = argv[++i];
       if (raw != null) {
         const numeric = Number(raw);
-        if (Number.isFinite(numeric) && numeric >= 0) { minHoursBeforeClose = numeric; }
-        else { parseErrors.push(`Invalid --min-hours-before-close value: "${raw}"`); }
-      } else { parseErrors.push('--min-hours-before-close requires a value'); }
-    } else if (arg === '--snapshot') {
-      const val = argv[++i];
-      if (val === 'last') { snapshotLast = true; }
-      else if (val != null) { parseErrors.push(`Invalid --snapshot value: "${val}" (expected "last")`); }
-      else { parseErrors.push('--snapshot requires a value (e.g., --snapshot last)'); }
+        if (Number.isFinite(numeric) && numeric > 0) { days = numeric; }
+        else { parseErrors.push(`Invalid --days value: "${raw}" (expected a positive number)`); }
+      } else { parseErrors.push('--days requires a value'); }
     } else if (arg === '--export') {
       const val = argv[++i];
       if (val != null) { exportPath = val; } else { parseErrors.push('--export requires a value'); }
@@ -197,5 +190,5 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): ParsedArgs {
     positionalArgs.unshift(first);
   }
 
-  return { subcommand, positionalArgs, json, theme, ticker, interval, since, minConfidence, minEdge, side, live, refresh, report, dryRun, verbose, performance, resolved, unresolved, from, to, category, minHoursBeforeClose, snapshotLast, exportPath, parseErrors };
+  return { subcommand, positionalArgs, json, theme, ticker, interval, since, minConfidence, minEdge, side, live, refresh, report, dryRun, verbose, performance, resolved, unresolved, days, from, to, category, exportPath, parseErrors };
 }

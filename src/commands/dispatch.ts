@@ -241,8 +241,6 @@ export async function dispatch(args: ParsedArgs): Promise<void> {
       } else if (resp.ok && resp.data) {
         console.log(formatBacktestHuman(resp.data, {
           minEdge: args.minEdge ?? 0.05,
-          minHoursBeforeClose: args.minHoursBeforeClose ?? 24,
-          snapshotLast: args.snapshotLast,
         }));
       } else {
         console.error(resp.error?.message ?? 'Backtest failed');

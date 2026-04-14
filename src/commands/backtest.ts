@@ -1,14 +1,14 @@
 import type { ParsedArgs } from './parse-args.js';
 import type { CLIResponse } from './json.js';
-import { wrapSuccess, wrapError } from './json.js';
+import { wrapSuccess } from './json.js';
 import { getDb } from '../db/index.js';
 import { discoverSettledMarkets, discoverOpenMarkets } from '../backtest/discovery.js';
-import { fetchAndCacheHistory, selectSnapshot, SubscriptionRequiredError, type OutcomeProbability } from '../backtest/fetcher.js';
-import { computeResolvedMetrics } from '../backtest/metrics.js';
-import type { BacktestResult, ResolvedMarket, UnresolvedEdge } from '../backtest/types.js';
+import { fetchAndCacheHistory, selectSnapshotByDate, SubscriptionRequiredError, type OutcomeProbability } from '../backtest/fetcher.js';
+import { computeMetrics } from '../backtest/metrics.js';
+import type { BacktestResult, ScoredSignal } from '../backtest/types.js';
 import { formatBacktestHuman, exportCSV, type FormatOpts } from '../backtest/renderer.js';
 
-/** Look up per-market model/market probability from outcome_probabilities array. */
+/** Look up per-market model/market probability from outcome_probabilities array (0-100 scale). */
 function findOutcomeProb(
   outcomes: OutcomeProbability[] | null | undefined,
   marketTicker: string,
@@ -18,10 +18,7 @@ function findOutcomeProb(
     o => o.market_ticker.toUpperCase() === marketTicker.toUpperCase(),
   );
   if (!match) return null;
-  return {
-    modelProb: match.model_probability / 100,
-    marketProb: match.market_probability / 100,
-  };
+  return { modelProb: match.model_probability, marketProb: match.market_probability };
 }
 
 export { formatBacktestHuman };
@@ -29,32 +26,21 @@ export type { FormatOpts };
 
 export async function handleBacktest(args: ParsedArgs): Promise<CLIResponse<BacktestResult>> {
   const db = getDb();
+  const days = args.days ?? 30;
   const minEdge = args.minEdge ?? 0.05;
-  const minHours = args.snapshotLast ? 0 : (args.minHoursBeforeClose ?? 24);
+  const minEdgePp = minEdge * 100;
   const now = new Date();
+  const lookbackDate = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
 
-  const dateRange = {
-    from: args.from ?? '2025-01-01',
-    to: args.to ?? now.toISOString().slice(0, 10),
-  };
-
-  let resolvedResult: BacktestResult['resolved'] = null;
-  let unresolvedResult: BacktestResult['unresolved'] = null;
-
+  const signals: ScoredSignal[] = [];
   let subscriptionNotice: string | undefined;
 
-  // ─── RESOLVED ──────────────────────────────────────────────────────────
+  // ─── RESOLVED: settled markets with historical Octagon snapshots ────────
   if (!args.unresolved) {
     try {
-      const settled = await discoverSettledMarkets(db, {
-        category: args.category,
-        from: dateRange.from,
-        to: dateRange.to,
-      });
+      const settled = await discoverSettledMarkets(db, { category: args.category });
 
       if (settled.length > 0) {
-        const resolvedMarkets: ResolvedMarket[] = [];
-
         // Group by event_ticker to batch history fetches
         const byEvent = new Map<string, typeof settled>();
         for (const m of settled) {
@@ -72,39 +58,40 @@ export async function handleBacktest(args: ParsedArgs): Promise<CLIResponse<Back
             continue;
           }
 
+          // Find the snapshot closest to N days ago
+          const snap = selectSnapshotByDate(snapshots, lookbackDate);
+          if (!snap) continue;
+
           for (const m of markets) {
-            const snap = selectSnapshot(snapshots, m.close_time, minHours);
-            if (!snap) continue;
-
+            // Per-market probability from outcome_probabilities (0-100 scale)
             const perMarket = findOutcomeProb(snap.outcome_probabilities, m.ticker);
-            const modelProb = perMarket?.modelProb ?? snap.model_probability / 100;
-            const marketProb = perMarket?.marketProb ?? snap.market_probability / 100;
+            const modelProb = perMarket?.modelProb ?? snap.model_probability;
+            const marketThen = perMarket?.marketProb ?? snap.market_probability;
+            const marketNow = m.result === 'yes' ? 100 : 0;
+            const edgePp = Math.round((modelProb - marketThen) * 10) / 10;
 
-            const closeEpoch = new Date(m.close_time).getTime();
-            const snapEpoch = new Date(snap.captured_at).getTime();
-            const hoursBefore = (closeEpoch - snapEpoch) / (3600 * 1000);
+            // P&L: Buy YES if edge > 0, Buy NO if edge < 0
+            let pnl = 0;
+            if (edgePp > 0) {
+              pnl = (marketNow - marketThen) / 100;  // bought YES at marketThen, settled at marketNow
+            } else if (edgePp < 0) {
+              pnl = (marketThen - marketNow) / 100;  // bought NO at (100-marketThen), settled at (100-marketNow)
+            }
 
-            resolvedMarkets.push({
-              ticker: m.ticker,
+            signals.push({
               event_ticker: m.event_ticker,
-              model_prob: modelProb,
-              market_prob: marketProb,
-              edge_pp: Math.round((modelProb - marketProb) * 1000) / 10,
-              hours_before_close: hoursBefore,
-              confidence_score: snap.confidence_score ?? 0,
+              market_ticker: m.ticker,
               series_category: m.series_category,
-              outcome: m.result === 'yes' ? 1 : 0,
+              model_prob: modelProb,
+              market_then: marketThen,
+              market_now: marketNow,
+              resolved: true,
+              edge_pp: edgePp,
+              pnl: Math.round(pnl * 100) / 100,
+              confidence_score: snap.confidence_score ?? 0,
               close_time: m.close_time,
             });
           }
-        }
-
-        if (resolvedMarkets.length > 0) {
-          const minEdgePp = minEdge * 100;
-          resolvedResult = computeResolvedMetrics(resolvedMarkets, minEdgePp);
-          resolvedResult.coverage = settled.length > 0
-            ? resolvedMarkets.length / settled.length
-            : 0;
         }
       }
     } catch (err) {
@@ -116,65 +103,108 @@ export async function handleBacktest(args: ParsedArgs): Promise<CLIResponse<Back
     }
   }
 
-  // ─── UNRESOLVED ────────────────────────────────────────────────────────
-  if (!args.resolved) {
-
+  // ─── UNRESOLVED: open markets with current Kalshi prices ───────────────
+  if (!args.resolved && !subscriptionNotice) {
     const openMarkets = await discoverOpenMarkets(db, { category: args.category });
 
-    const edges: UnresolvedEdge[] = [];
     for (const m of openMarkets) {
-      // Get latest Octagon report from local cache
+      // Get Octagon report from local cache
       const report = db.query(
-        "SELECT model_prob, market_prob, confidence_score, outcome_probabilities_json FROM octagon_reports WHERE event_ticker = $et AND variant_used = 'events-api' ORDER BY fetched_at DESC LIMIT 1",
-      ).get({ $et: m.event_ticker }) as { model_prob: number; market_prob: number | null; confidence_score: number | null; outcome_probabilities_json: string | null } | null;
+        "SELECT model_prob, confidence_score, outcome_probabilities_json FROM octagon_reports WHERE event_ticker = $et AND variant_used = 'events-api' ORDER BY fetched_at DESC LIMIT 1",
+      ).get({ $et: m.event_ticker }) as { model_prob: number; confidence_score: number | null; outcome_probabilities_json: string | null } | null;
 
       if (!report) continue;
 
-      // Use per-market probability from outcome_probabilities if available
-      let outcomes: OutcomeProbability[] | null = null;
-      if (report.outcome_probabilities_json) {
-        try { outcomes = JSON.parse(report.outcome_probabilities_json); } catch { /* skip */ }
+      // Try to get historical snapshot from N days ago for market_then
+      // Fall back to the prefetched events API market_probability if no history
+      let modelProb: number;
+      let marketThen: number;
+      let confidenceScore = report.confidence_score ?? 0;
+
+      // Check if we have cached history for this event
+      const historyCount = db.query(
+        'SELECT COUNT(*) as cnt FROM octagon_history WHERE event_ticker = $et',
+      ).get({ $et: m.event_ticker }) as { cnt: number };
+
+      if (historyCount.cnt > 0) {
+        // Use historical snapshot from N days ago
+        const rows = db.query(
+          `SELECT model_probability, market_probability, confidence_score, outcome_probabilities_json
+           FROM octagon_history WHERE event_ticker = $et AND captured_at <= $cutoff
+           ORDER BY captured_at DESC LIMIT 1`,
+        ).get({ $et: m.event_ticker, $cutoff: lookbackDate.toISOString() }) as {
+          model_probability: number; market_probability: number;
+          confidence_score: number | null; outcome_probabilities_json: string | null;
+        } | null;
+
+        if (rows) {
+          let outcomes: OutcomeProbability[] | null = null;
+          if (rows.outcome_probabilities_json) {
+            try { outcomes = JSON.parse(rows.outcome_probabilities_json); } catch { /* skip */ }
+          }
+          const perMarket = findOutcomeProb(outcomes, m.ticker);
+          modelProb = perMarket?.modelProb ?? rows.model_probability;
+          marketThen = perMarket?.marketProb ?? rows.market_probability;
+          confidenceScore = rows.confidence_score ?? confidenceScore;
+        } else {
+          // No snapshot old enough — use current prefetched data
+          let outcomes: OutcomeProbability[] | null = null;
+          if (report.outcome_probabilities_json) {
+            try { outcomes = JSON.parse(report.outcome_probabilities_json); } catch { /* skip */ }
+          }
+          const perMarket = findOutcomeProb(outcomes, m.ticker);
+          modelProb = perMarket ? perMarket.modelProb : report.model_prob * 100;
+          marketThen = perMarket ? perMarket.marketProb : m.market_prob * 100;
+        }
+      } else {
+        // No history — use current prefetched data as both model and market_then
+        let outcomes: OutcomeProbability[] | null = null;
+        if (report.outcome_probabilities_json) {
+          try { outcomes = JSON.parse(report.outcome_probabilities_json); } catch { /* skip */ }
+        }
+        const perMarket = findOutcomeProb(outcomes, m.ticker);
+        modelProb = perMarket ? perMarket.modelProb : report.model_prob * 100;
+        marketThen = perMarket ? perMarket.marketProb : m.market_prob * 100;
       }
-      const perMarket = findOutcomeProb(outcomes, m.ticker);
-      const modelProb = perMarket?.modelProb ?? report.model_prob;
-      const edgePp = Math.round((modelProb - m.market_prob) * 1000) / 10;
 
-      if (Math.abs(edgePp) < minEdge * 100) continue;
+      const marketNow = m.market_prob * 100; // current Kalshi price (0-100)
+      const edgePp = Math.round((modelProb - marketThen) * 10) / 10;
 
-      edges.push({
-        ticker: m.ticker,
+      // M2M P&L
+      let pnl = 0;
+      if (edgePp > 0) {
+        pnl = (marketNow - marketThen) / 100;
+      } else if (edgePp < 0) {
+        pnl = (marketThen - marketNow) / 100;
+      }
+
+      signals.push({
         event_ticker: m.event_ticker,
-        model_prob: modelProb,
-        market_prob: m.market_prob,
-        edge_pp: edgePp,
-        direction: edgePp > 0 ? 'YES' : 'NO',
-        confidence_score: report.confidence_score ?? 0,
-        closes_at: m.close_time,
+        market_ticker: m.ticker,
         series_category: m.series_category,
+        model_prob: modelProb,
+        market_then: marketThen,
+        market_now: marketNow,
+        resolved: false,
+        edge_pp: edgePp,
+        pnl: Math.round(pnl * 100) / 100,
+        confidence_score: confidenceScore,
+        close_time: m.close_time,
       });
     }
-
-    // Sort by |edge| descending
-    edges.sort((a, b) => Math.abs(b.edge_pp) - Math.abs(a.edge_pp));
-
-    unresolvedResult = {
-      edges,
-      total_open_with_coverage: openMarkets.length,
-      total_open: openMarkets.length,
-    };
   }
 
+  // ─── COMPUTE METRICS ───────────────────────────────────────────────────
+  const metrics = computeMetrics(signals, minEdgePp);
+
   const result: BacktestResult = {
-    resolved: resolvedResult,
-    unresolved: unresolvedResult,
-    date_range: dateRange,
+    ...metrics,
+    days,
     subscription_notice: subscriptionNotice,
   };
 
-  // Export CSV if requested
   if (args.exportPath) {
     exportCSV(result, args.exportPath);
-
   }
 
   return wrapSuccess('backtest', result);

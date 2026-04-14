@@ -1,44 +1,33 @@
 export interface BacktestOpts {
+  days: number;               // lookback period in days (default 30)
   resolvedOnly: boolean;
   unresolvedOnly: boolean;
-  from?: string;          // ISO date
-  to?: string;            // ISO date
   category?: string;
-  minHoursBeforeClose: number;  // default 24
-  minEdge: number;              // default 0.05 (5pp)
+  minEdge: number;            // 0-1 scale (e.g., 0.05 = 5pp)
   exportPath?: string;
 }
 
-export interface BacktestSnapshot {
-  ticker: string;
+/** A single scored market signal — unified type for both resolved and unresolved. */
+export interface ScoredSignal {
   event_ticker: string;
-  model_prob: number;       // 0-1
-  market_prob: number;      // 0-1
-  edge_pp: number;          // percentage points
-  hours_before_close: number;
-  confidence_score: number;
+  market_ticker: string;
   series_category: string;
-}
-
-export interface ResolvedMarket extends BacktestSnapshot {
-  outcome: 0 | 1;          // YES=1, NO=0
-  close_time: string;       // ISO 8601
-}
-
-export interface UnresolvedEdge {
-  ticker: string;
-  event_ticker: string;
-  model_prob: number;
-  market_prob: number;
-  edge_pp: number;
-  direction: 'YES' | 'NO';
+  model_prob: number;         // 0-100 (Octagon model % from N days ago)
+  market_then: number;        // 0-100 (Kalshi trading price N days ago, from Octagon snapshot)
+  market_now: number;         // 0-100 (settlement for resolved, current price for unresolved)
+  resolved: boolean;
+  edge_pp: number;            // model_prob - market_then
+  pnl: number;               // computed P&L for this signal
   confidence_score: number;
-  closes_at: string;
-  series_category: string;
+  close_time: string;
 }
 
-export interface ResolvedResult {
+export interface BacktestResult {
   verdict: { summary: string; significant: boolean; profitable: boolean };
+  days: number;
+  events_scored: number;
+  markets_resolved: number;
+  markets_unresolved: number;
   brier_octagon: number;
   brier_market: number;
   skill_score: number;
@@ -48,21 +37,6 @@ export interface ResolvedResult {
   hit_rate_ci: [number, number];
   flat_bet_pnl: number;
   flat_bet_roi: number;
-  markets_evaluated: number;
-  events_evaluated: number;
-  coverage: number;       // fraction of settled markets with Octagon history
-  markets: ResolvedMarket[];  // per-market detail for CSV export
-}
-
-export interface UnresolvedResult {
-  edges: UnresolvedEdge[];
-  total_open_with_coverage: number;
-  total_open: number;
-}
-
-export interface BacktestResult {
-  resolved: ResolvedResult | null;
-  unresolved: UnresolvedResult | null;
-  date_range: { from: string; to: string };
+  signals: ScoredSignal[];
   subscription_notice?: string;
 }

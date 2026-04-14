@@ -23,7 +23,8 @@ function makeArgs(overrides: Partial<ParsedArgs>): ParsedArgs {
     performance: false,
     resolved: false,
     unresolved: false,
-    snapshotLast: false,
+
+
     parseErrors: [],
     ...overrides,
   };

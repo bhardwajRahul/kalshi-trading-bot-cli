@@ -98,51 +98,50 @@ Type help for commands, or just ask a question.
 | `--min-edge <n>` | Minimum edge threshold |
 | `--interval <min>` | Scan interval in minutes (watch) |
 | `--live` | Force 15m scan interval (watch) |
+| `--days <n>` | Lookback period in days (backtest, default 30) |
 | `--resolved` | Resolved markets only (backtest) |
 | `--unresolved` | Open markets only (backtest) |
 | `--category <cat>` | Filter by category (backtest) |
-| `--from <date>` | Start date for date range (backtest) |
-| `--to <date>` | End date for date range (backtest) |
-| `--min-hours-before-close <n>` | Snapshot lead time in hours (backtest, default 24) |
-| `--snapshot last` | Use latest snapshot, no lead time (backtest) |
 | `--export <path>` | Export per-market CSV (backtest) |
 
 ### Backtesting
 
-Does the model find real edge? The `backtest` command answers this with two views:
+Does the model find real edge? Look back N days, compare what the model said then to where the market is now.
 
-- **Resolved** — measures model accuracy vs. market accuracy on settled markets using Brier scores, then checks if the edge signals paid off with flat-bet P&L.
-- **Unresolved** — shows where the model currently sees edge on open markets, ranked by size.
+- **Resolved** — scored against Kalshi settlement (YES=100%, NO=0%)
+- **Unresolved** — mark-to-market vs current Kalshi trading price
 
 ```bash
-bun start backtest                              # both views (default)
-bun start backtest --resolved                   # scorecard only
-bun start backtest --unresolved --min-edge 10   # live edge scanner (10pp threshold)
+bun start backtest                              # 30-day lookback (default)
+bun start backtest --days 60                    # 60-day lookback
+bun start backtest --resolved                   # resolved only
+bun start backtest --unresolved --min-edge 10   # unresolved, 10pp threshold
 bun start backtest --category crypto            # filter by category
-bun start backtest --from 2026-01-01 --to 2026-03-31
 bun start backtest --export results.csv         # per-market detail
 ```
 
 ```
-Octagon Backtest — 2025-01-01 – 2026-04-14
-═══════════════════════════════════════
+Octagon Backtest — 30-day lookback (03/15 – 04/14)
+══════════════════════════════════════════════════════════
 
-RESOLVED — Model Scorecard
-──────────────────────────
-VERDICT: Model shows edge (Skill +8.4% [CI: +0.7%, +15.7%]; ROI +13.8%)
+VERDICT: Model has edge (Skill +12.5% [CI: +4.1%, +20.8%]; ROI +7.8%)
 
-  Markets        1553  (82 events)
-  Brier (Octagon)   0.085
-  Brier (Market)    0.093
-  Skill Score       +8.4%  [95% CI: 0.7% to 15.7%]
-  Hit rate          68.2%   [95% CI: 63.2% to 73.2%]
-  Flat-bet P&L      +$46.85 (ROI: +13.8%)
+  Events         83
+  Markets        247   (142 resolved, 105 unresolved)
+  Brier (Octagon)   0.168
+  Brier (Market)    0.192
+  Skill Score       +12.5%  [95% CI: +4.1% to +20.8%]
+  Hit rate          61.4%  [95% CI: 54.2% to 68.1%]
+  Flat-bet P&L      +$14.38 (ROI: +7.8%)
 
-UNRESOLVED — Live Edge Scanner (min edge: 5pp)
-──────────────────────────────────────────────
-  Ticker                    Model   Market   Edge     Dir    Conf      Closes
-  KXIPODISCORD-26SEP01        88%       7%   +81pp   YES ▲   med     140 days
-  KXUSDBRLMAX-26DEC31-T5.7    82%       3%   +79pp   YES ▲   high    262 days
+RESOLVED (142 markets)
+  Ticker                    Model   Mkt Then   Outcome   Edge    P&L
+  KXBTC-26APR-B95000        72%     58%        YES 100%  +14pp   +$0.42
+  ...
+
+UNRESOLVED (105 markets)
+  Ticker                    Model   Mkt Then   Now       Edge    M2M
+  KXBTC-26MAY-B110000       71%     58%        68%       +13pp   +$0.10
   ...
 ```
 

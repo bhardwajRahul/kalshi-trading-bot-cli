@@ -1,5 +1,4 @@
-import { computeBrier } from '../eval/brier.js';
-import type { ResolvedMarket, ResolvedResult } from './types.js';
+import type { ScoredSignal, BacktestResult } from './types.js';
 
 /**
  * Skill score: how much better Octagon is vs the market as a forecaster.
@@ -46,14 +45,25 @@ export function bootstrapCI(
 }
 
 /**
- * Compute all resolved-market metrics from a list of resolved markets.
- * Each market must have model_prob, market_prob, outcome, edge_pp.
+ * Compute Brier score: ((forecast/100) - (outcome/100))²
+ * Both forecast and outcome are on 0-100 scale.
  */
-export function computeResolvedMetrics(markets: ResolvedMarket[], minEdgePp = 5): ResolvedResult {
-  const n = markets.length;
+function brier(forecast: number, outcome: number): number {
+  return ((forecast / 100) - (outcome / 100)) ** 2;
+}
+
+/**
+ * Compute all backtest metrics from a unified list of scored signals.
+ */
+export function computeMetrics(signals: ScoredSignal[], minEdgePp = 5): Omit<BacktestResult, 'subscription_notice'> {
+  const n = signals.length;
   if (n === 0) {
     return {
-      verdict: { summary: 'No resolved markets with Octagon coverage found.', significant: false, profitable: false },
+      verdict: { summary: 'No markets with Octagon coverage found.', significant: false, profitable: false },
+      days: 0,
+      events_scored: 0,
+      markets_resolved: 0,
+      markets_unresolved: 0,
       brier_octagon: 0,
       brier_market: 0,
       skill_score: 0,
@@ -63,22 +73,19 @@ export function computeResolvedMetrics(markets: ResolvedMarket[], minEdgePp = 5)
       hit_rate_ci: [0, 0],
       flat_bet_pnl: 0,
       flat_bet_roi: 0,
-      markets_evaluated: 0,
-      events_evaluated: 0,
-      coverage: 0,
-      markets: [],
+      signals: [],
     };
   }
 
-  // Brier scores
-  const brierOctagonScores = markets.map(m => computeBrier(m.model_prob, m.outcome));
-  const brierMarketScores = markets.map(m => computeBrier(m.market_prob, m.outcome));
+  // Brier scores — model vs market, both compared to outcome (market_now)
+  const brierOctagonScores = signals.map(s => brier(s.model_prob, s.market_now));
+  const brierMarketScores = signals.map(s => brier(s.market_then, s.market_now));
   const brierOctagon = brierOctagonScores.reduce((a, b) => a + b, 0) / n;
   const brierMarket = brierMarketScores.reduce((a, b) => a + b, 0) / n;
 
-  // Skill score with bootstrap CI — resample both octagon and market brier scores
+  // Skill score with bootstrap CI — resample both
   const skillScore = computeSkillScore(brierOctagon, brierMarket);
-  const indices = markets.map((_, i) => i);
+  const indices = signals.map((_, i) => i);
   const skillCI = bootstrapCI(indices, (sample) => {
     let sumOctagon = 0;
     let sumMarket = 0;
@@ -92,50 +99,42 @@ export function computeResolvedMetrics(markets: ResolvedMarket[], minEdgePp = 5)
   });
 
   // Edge signals: where |edge| >= minEdgePp AND edge is non-zero
-  const edgeSignals = markets.filter(m => m.edge_pp !== 0 && Math.abs(m.edge_pp) >= minEdgePp);
+  const edgeSignals = signals.filter(s => s.edge_pp !== 0 && Math.abs(s.edge_pp) >= minEdgePp);
   const edgeCount = edgeSignals.length;
 
-  // Hit rate: edge direction was correct
-  const hits = edgeSignals.filter(m => {
-    if (m.edge_pp > 0) return m.outcome === 1;
-    return m.outcome === 0;
+  // Hit rate: did the market move in the direction the model predicted?
+  const hits = edgeSignals.filter(s => {
+    // Model said YES (edge > 0): hit if market_now > market_then
+    // Model said NO (edge < 0): hit if market_now < market_then
+    if (s.edge_pp > 0) return s.market_now > s.market_then;
+    return s.market_now < s.market_then;
   });
   const hitRate = edgeCount > 0 ? hits.length / edgeCount : 0;
 
   // Bootstrap hit rate CI
-  const hitRateData = edgeSignals.map(m => {
-    if (m.edge_pp > 0) return m.outcome === 1 ? 1 : 0;
-    return m.outcome === 0 ? 1 : 0;
+  const hitRateData = edgeSignals.map(s => {
+    if (s.edge_pp > 0) return s.market_now > s.market_then ? 1 : 0;
+    return s.market_now < s.market_then ? 1 : 0;
   });
   const hitRateCI = bootstrapCI(hitRateData, (sample) => {
     return sample.reduce((a, b) => a + b, 0) / sample.length;
   });
 
-  // Flat-bet P&L: $1 per edge signal
-  const stakePerEdge = 1;
-  let pnl = 0;
-  for (const m of edgeSignals) {
-    const p = m.market_prob;
-    if (m.edge_pp > 0) {
-      // BUY YES at price P
-      pnl += m.outcome === 1 ? (1 - p) : -p;
-    } else {
-      // BUY NO at price P
-      pnl += m.outcome === 0 ? p : -(1 - p);
-    }
-  }
-  const totalDeployed = edgeCount * stakePerEdge;
-  const roi = totalDeployed > 0 ? pnl / totalDeployed : 0;
+  // P&L: already computed per signal
+  const pnl = edgeSignals.reduce((sum, s) => sum + s.pnl, 0);
+  const roi = edgeCount > 0 ? pnl / edgeCount : 0;
 
-  // Unique events
-  const uniqueEvents = new Set(markets.map(m => m.event_ticker));
+  // Counts
+  const uniqueEvents = new Set(signals.map(s => s.event_ticker));
+  const resolved = signals.filter(s => s.resolved).length;
+  const unresolved = signals.filter(s => !s.resolved).length;
 
   // Verdict
-  const significant = skillCI[0] > 0; // CI excludes zero
+  const significant = skillCI[0] > 0;
   const profitable = pnl > 0;
   let summary: string;
   if (skillScore > 0.05 && significant && profitable) {
-    summary = `Model shows edge (Skill +${(skillScore * 100).toFixed(1)}% [CI: +${(skillCI[0] * 100).toFixed(1)}%, +${(skillCI[1] * 100).toFixed(1)}%]; ROI +${(roi * 100).toFixed(1)}%)`;
+    summary = `Model has edge (Skill +${(skillScore * 100).toFixed(1)}% [CI: +${(skillCI[0] * 100).toFixed(1)}%, +${(skillCI[1] * 100).toFixed(1)}%]; ROI +${(roi * 100).toFixed(1)}%)`;
   } else if (skillScore > 0 && !significant) {
     summary = `Inconclusive — need more data (Skill +${(skillScore * 100).toFixed(1)}%, CI includes zero)`;
   } else {
@@ -144,6 +143,10 @@ export function computeResolvedMetrics(markets: ResolvedMarket[], minEdgePp = 5)
 
   return {
     verdict: { summary, significant, profitable },
+    days: 0, // filled by caller
+    events_scored: uniqueEvents.size,
+    markets_resolved: resolved,
+    markets_unresolved: unresolved,
     brier_octagon: brierOctagon,
     brier_market: brierMarket,
     skill_score: skillScore,
@@ -153,9 +156,6 @@ export function computeResolvedMetrics(markets: ResolvedMarket[], minEdgePp = 5)
     hit_rate_ci: hitRateCI,
     flat_bet_pnl: pnl,
     flat_bet_roi: roi,
-    markets_evaluated: n,
-    events_evaluated: uniqueEvents.size,
-    coverage: 0, // filled in by caller
-    markets,
+    signals,
   };
 }

@@ -81,22 +81,20 @@ Side defaults to YES if omitted.`,
 
 ${p}cancel <order_id>`,
 
-    backtest: `**${p}backtest** — Model accuracy scorecard & live edge scanner
+    backtest: `**${p}backtest** — Model accuracy scorecard & edge scanner
 
-${p}backtest                              Both resolved + unresolved (default)
-${p}backtest --resolved                   Resolved only (scorecard)
-${p}backtest --unresolved                 Unresolved only (live edge scanner)
+${p}backtest                              30-day lookback, both sections (default)
+${p}backtest --days 60                    60-day lookback
+${p}backtest --resolved                   Resolved markets only
+${p}backtest --unresolved                 Unresolved markets only
 ${p}backtest --category crypto            Filter by category
-${p}backtest --from 2026-01-01 --to 2026-03-31
-${p}backtest --min-hours-before-close 48  Custom lead time (resolved)
 ${p}backtest --min-edge 10                Stricter edge threshold (pp)
-${p}backtest --snapshot last              Use latest snapshot (no lead time)
 ${p}backtest --export results.csv         Per-market detail CSV
 ${p}backtest --json                       Machine-readable output
 
-Resolved: measures Brier accuracy, skill score, edge hit rate, and flat-bet P&L
-on settled markets using Octagon snapshots from ≥24h before close.
-Unresolved: ranks open markets by current model-vs-market edge.`,
+Looks back N days, compares what the model said then to where the market is now.
+Resolved markets: scored against Kalshi settlement (0 or 100).
+Unresolved markets: mark-to-market vs current Kalshi trading price.`,
 
     'clear-cache': `**${ctx === 'cli' ? '' : 'bun start '}clear-cache** — Delete local cache
 
@@ -160,7 +158,7 @@ System:
   help [command]                Show help for a command
 
 Flags: --json, --refresh, --performance, --dry-run, --verbose
-Backtest flags: --resolved, --unresolved, --category, --from, --to, --min-edge, --export
+Backtest flags: --days, --resolved, --unresolved, --category, --min-edge, --export
 Run "kalshi help <command>" for detailed usage.`;
   }
 
