@@ -64,4 +64,5 @@ export interface BacktestResult {
   resolved: ResolvedResult | null;
   unresolved: UnresolvedResult | null;
   date_range: { from: string; to: string };
+  subscription_notice?: string;
 }

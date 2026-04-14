@@ -3,7 +3,7 @@ import type { CLIResponse } from './json.js';
 import { wrapSuccess, wrapError } from './json.js';
 import { getDb } from '../db/index.js';
 import { discoverSettledMarkets, discoverOpenMarkets } from '../backtest/discovery.js';
-import { fetchAndCacheHistory, selectSnapshot, type OutcomeProbability } from '../backtest/fetcher.js';
+import { fetchAndCacheHistory, selectSnapshot, SubscriptionRequiredError, type OutcomeProbability } from '../backtest/fetcher.js';
 import { computeResolvedMetrics } from '../backtest/metrics.js';
 import type { BacktestResult, ResolvedMarket, UnresolvedEdge } from '../backtest/types.js';
 import { formatBacktestHuman, exportCSV, type FormatOpts } from '../backtest/renderer.js';
@@ -41,70 +41,77 @@ export async function handleBacktest(args: ParsedArgs): Promise<CLIResponse<Back
   let resolvedResult: BacktestResult['resolved'] = null;
   let unresolvedResult: BacktestResult['unresolved'] = null;
 
+  let subscriptionNotice: string | undefined;
+
   // ─── RESOLVED ──────────────────────────────────────────────────────────
   if (!args.unresolved) {
+    try {
+      const settled = await discoverSettledMarkets(db, {
+        category: args.category,
+        from: dateRange.from,
+        to: dateRange.to,
+      });
 
-    const settled = await discoverSettledMarkets(db, {
-      category: args.category,
-      from: dateRange.from,
-      to: dateRange.to,
-    });
+      if (settled.length > 0) {
+        const resolvedMarkets: ResolvedMarket[] = [];
 
-    if (settled.length > 0) {
-
-      const resolvedMarkets: ResolvedMarket[] = [];
-
-      // Group by event_ticker to batch history fetches
-      const byEvent = new Map<string, typeof settled>();
-      for (const m of settled) {
-        const arr = byEvent.get(m.event_ticker) ?? [];
-        arr.push(m);
-        byEvent.set(m.event_ticker, arr);
-      }
-
-      for (const [eventTicker, markets] of byEvent) {
-        // Fetch full history (no capturedTo) so the cache is used on repeat runs
-        let snapshots;
-        try {
-          snapshots = await fetchAndCacheHistory(db, eventTicker);
-        } catch {
-          continue; // History fetch failed — skip this event
+        // Group by event_ticker to batch history fetches
+        const byEvent = new Map<string, typeof settled>();
+        for (const m of settled) {
+          const arr = byEvent.get(m.event_ticker) ?? [];
+          arr.push(m);
+          byEvent.set(m.event_ticker, arr);
         }
 
-        for (const m of markets) {
-          const snap = selectSnapshot(snapshots, m.close_time, minHours);
-          if (!snap) continue;
+        for (const [eventTicker, markets] of byEvent) {
+          let snapshots;
+          try {
+            snapshots = await fetchAndCacheHistory(db, eventTicker);
+          } catch (err) {
+            if (err instanceof SubscriptionRequiredError) throw err;
+            continue;
+          }
 
-          // Use per-market probability from outcome_probabilities if available
-          const perMarket = findOutcomeProb(snap.outcome_probabilities, m.ticker);
-          const modelProb = perMarket?.modelProb ?? snap.model_probability / 100;
-          const marketProb = perMarket?.marketProb ?? snap.market_probability / 100;
+          for (const m of markets) {
+            const snap = selectSnapshot(snapshots, m.close_time, minHours);
+            if (!snap) continue;
 
-          const closeEpoch = new Date(m.close_time).getTime();
-          const snapEpoch = new Date(snap.captured_at).getTime();
-          const hoursBefore = (closeEpoch - snapEpoch) / (3600 * 1000);
+            const perMarket = findOutcomeProb(snap.outcome_probabilities, m.ticker);
+            const modelProb = perMarket?.modelProb ?? snap.model_probability / 100;
+            const marketProb = perMarket?.marketProb ?? snap.market_probability / 100;
 
-          resolvedMarkets.push({
-            ticker: m.ticker,
-            event_ticker: m.event_ticker,
-            model_prob: modelProb,
-            market_prob: marketProb,
-            edge_pp: Math.round((modelProb - marketProb) * 1000) / 10,
-            hours_before_close: hoursBefore,
-            confidence_score: snap.confidence_score ?? 0,
-            series_category: m.series_category,
-            outcome: m.result === 'yes' ? 1 : 0,
-            close_time: m.close_time,
-          });
+            const closeEpoch = new Date(m.close_time).getTime();
+            const snapEpoch = new Date(snap.captured_at).getTime();
+            const hoursBefore = (closeEpoch - snapEpoch) / (3600 * 1000);
+
+            resolvedMarkets.push({
+              ticker: m.ticker,
+              event_ticker: m.event_ticker,
+              model_prob: modelProb,
+              market_prob: marketProb,
+              edge_pp: Math.round((modelProb - marketProb) * 1000) / 10,
+              hours_before_close: hoursBefore,
+              confidence_score: snap.confidence_score ?? 0,
+              series_category: m.series_category,
+              outcome: m.result === 'yes' ? 1 : 0,
+              close_time: m.close_time,
+            });
+          }
+        }
+
+        if (resolvedMarkets.length > 0) {
+          const minEdgePp = minEdge * 100;
+          resolvedResult = computeResolvedMetrics(resolvedMarkets, minEdgePp);
+          resolvedResult.coverage = settled.length > 0
+            ? resolvedMarkets.length / settled.length
+            : 0;
         }
       }
-
-      if (resolvedMarkets.length > 0) {
-        const minEdgePp = minEdge * 100;
-        resolvedResult = computeResolvedMetrics(resolvedMarkets, minEdgePp);
-        resolvedResult.coverage = settled.length > 0
-          ? resolvedMarkets.length / settled.length
-          : 0;
+    } catch (err) {
+      if (err instanceof SubscriptionRequiredError) {
+        subscriptionNotice = err.message;
+      } else {
+        throw err;
       }
     }
   }
@@ -161,6 +168,7 @@ export async function handleBacktest(args: ParsedArgs): Promise<CLIResponse<Back
     resolved: resolvedResult,
     unresolved: unresolvedResult,
     date_range: dateRange,
+    subscription_notice: subscriptionNotice,
   };
 
   // Export CSV if requested

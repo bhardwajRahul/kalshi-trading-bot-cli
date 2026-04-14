@@ -129,7 +129,12 @@ export function formatBacktestHuman(result: BacktestResult, opts?: FormatOpts): 
   lines.push('═══════════════════════════════════════');
   lines.push('');
 
-  if (result.resolved) {
+  if (result.subscription_notice) {
+    lines.push('RESOLVED — Model Scorecard');
+    lines.push('──────────────────────────');
+    lines.push(`  ${result.subscription_notice}`);
+    lines.push('');
+  } else if (result.resolved) {
     lines.push(formatResolved(result.resolved, snapshotLabel));
     lines.push('');
   }
@@ -138,7 +143,7 @@ export function formatBacktestHuman(result: BacktestResult, opts?: FormatOpts): 
     lines.push(formatUnresolved(result.unresolved, minEdge));
   }
 
-  if (!result.resolved && !result.unresolved) {
+  if (!result.resolved && !result.unresolved && !result.subscription_notice) {
     lines.push('No data available. Run `bun start backtest` with a broader filter.');
   }
 

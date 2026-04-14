@@ -1,5 +1,13 @@
 import type { Database } from 'bun:sqlite';
 
+/** Thrown when the history API requires a paid subscription. */
+export class SubscriptionRequiredError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SubscriptionRequiredError';
+  }
+}
+
 /** Narrow snapshot type representing what we actually store and use from history. */
 export interface OutcomeProbability {
   market_ticker: string;
@@ -69,6 +77,13 @@ export async function fetchEventHistory(
 
     if (!resp.ok) {
       const body = await resp.text().catch(() => '');
+      if (resp.status === 403 || resp.status === 402) {
+        throw new SubscriptionRequiredError(
+          'The Octagon history API requires a paid subscription. ' +
+          'The unresolved edge scanner (--unresolved) uses the free events API. ' +
+          'Upgrade at https://app.octagonai.co to unlock resolved market backtesting.',
+        );
+      }
       throw new Error(`Octagon history API ${resp.status} for ${eventTicker}: ${body.slice(0, 200)}`);
     }
 
