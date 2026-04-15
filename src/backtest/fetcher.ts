@@ -48,7 +48,7 @@ const TIMEOUT_MS = 60_000;
  */
 export async function fetchEventHistory(
   eventTicker: string,
-  opts?: { capturedFrom?: string; capturedTo?: string },
+  opts?: { capturedFrom?: string; capturedTo?: string; days?: number },
 ): Promise<HistorySnapshot[]> {
   const apiKey = process.env.OCTAGON_API_KEY;
   if (!apiKey) throw new Error('OCTAGON_API_KEY not set');
@@ -58,9 +58,11 @@ export async function fetchEventHistory(
 
   do {
     const params = new URLSearchParams({ limit: String(PAGE_LIMIT) });
+    params.set('exclude_empty_model', 'true');
     if (cursor) params.set('cursor', cursor);
     if (opts?.capturedFrom) params.set('captured_from', opts.capturedFrom);
     if (opts?.capturedTo) params.set('captured_to', opts.capturedTo);
+    if (opts?.days) params.set('days', String(opts.days));
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
@@ -114,9 +116,9 @@ export async function fetchEventHistory(
 export async function fetchAndCacheHistory(
   db: Database,
   eventTicker: string,
-  opts?: { capturedFrom?: string; capturedTo?: string },
+  opts?: { capturedFrom?: string; capturedTo?: string; days?: number },
 ): Promise<HistorySnapshot[]> {
-  const hasWindow = !!(opts?.capturedFrom || opts?.capturedTo);
+  const hasWindow = !!(opts?.capturedFrom || opts?.capturedTo || opts?.days);
 
   // Only use cache for full-history requests (no time window filter)
   if (!hasWindow) {

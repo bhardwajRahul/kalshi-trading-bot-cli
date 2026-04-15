@@ -80,18 +80,16 @@ async function parallelMap<T, R>(
  */
 export async function discoverSettledMarkets(
   db: Database,
-  opts?: { category?: string; from?: string; to?: string },
+  opts?: { category?: string; days?: number },
 ): Promise<SettledMarket[]> {
-  const { query, params } = buildEventQuery(' AND has_history = 1', opts?.category);
+  // Filter to events with history AND close_time within the lookback window
+  let extraWhere = ' AND has_history = 1';
+  if (opts?.days) {
+    const cutoff = new Date(Date.now() - opts.days * 24 * 60 * 60 * 1000).toISOString();
+    extraWhere += ` AND (close_time IS NULL OR close_time >= '${cutoff}')`;
+  }
+  const { query, params } = buildEventQuery(extraWhere, opts?.category);
   const events = db.query(query).all(params) as Array<{ event_ticker: string; category: string | null }>;
-  // Normalize date-only strings: fromDate → start of day, toDate → end of day
-  const isDateOnly = /^\d{4}-\d{2}-\d{2}$/;
-  const fromDate = opts?.from ? new Date(opts.from) : null;
-  const toDate = opts?.to
-    ? (isDateOnly.test(opts.to)
-      ? new Date(opts.to + 'T23:59:59.999Z')
-      : new Date(opts.to))
-    : null;
 
   const batchResults = await parallelMap(events, async ({ event_ticker, category: cat }) => {
     const markets = await fetchEventMarkets(event_ticker);
@@ -100,12 +98,6 @@ export async function discoverSettledMarkets(
     for (const m of markets) {
       const result = (m.result ?? '').toLowerCase();
       if (result !== 'yes' && result !== 'no') continue;
-
-      if (m.close_time) {
-        const closeDate = new Date(m.close_time);
-        if (fromDate && closeDate < fromDate) continue;
-        if (toDate && closeDate > toDate) continue;
-      }
 
       settled.push({
         ticker: m.ticker,

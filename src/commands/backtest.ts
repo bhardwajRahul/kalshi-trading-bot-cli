@@ -38,7 +38,7 @@ export async function handleBacktest(args: ParsedArgs): Promise<CLIResponse<Back
   // ─── RESOLVED: settled markets with historical Octagon snapshots ────────
   if (!args.unresolved) {
     try {
-      const settled = await discoverSettledMarkets(db, { category: args.category });
+      const settled = await discoverSettledMarkets(db, { category: args.category, days });
 
       if (settled.length > 0) {
         // Group by event_ticker to batch history fetches
@@ -52,7 +52,7 @@ export async function handleBacktest(args: ParsedArgs): Promise<CLIResponse<Back
         for (const [eventTicker, markets] of byEvent) {
           let snapshots;
           try {
-            snapshots = await fetchAndCacheHistory(db, eventTicker);
+            snapshots = await fetchAndCacheHistory(db, eventTicker, { days });
           } catch (err) {
             if (err instanceof SubscriptionRequiredError) throw err;
             continue;
