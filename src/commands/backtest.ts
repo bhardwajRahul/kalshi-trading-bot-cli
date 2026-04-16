@@ -27,10 +27,15 @@ export type { FormatOpts };
 export async function handleBacktest(args: ParsedArgs): Promise<CLIResponse<BacktestResult>> {
   const db = getDb();
   const days = args.days ?? 30;
+  const maxAgeDays = args.maxAge ?? days;
   const minEdge = args.minEdge ?? 0.05;
   const minEdgePp = minEdge * 100;
+  const minVolume = args.minVolume ?? 1;
+  const minPrice = args.minPrice ?? 5;   // 0-100 scale
+  const maxPrice = args.maxPrice ?? 95;  // 0-100 scale
   const now = new Date();
   const lookbackDate = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+  const minPredictionDate = new Date(lookbackDate.getTime() - maxAgeDays * 24 * 60 * 60 * 1000);
 
   const signals: ScoredSignal[] = [];
   let subscriptionNotice: string | undefined;
@@ -52,14 +57,16 @@ export async function handleBacktest(args: ParsedArgs): Promise<CLIResponse<Back
         for (const [eventTicker, markets] of byEvent) {
           let snapshots;
           try {
-            snapshots = await fetchAndCacheHistory(db, eventTicker);
+            snapshots = await fetchAndCacheHistory(db, eventTicker, { maxAgeDays });
           } catch (err) {
             if (err instanceof SubscriptionRequiredError) throw err;
             continue;
           }
 
-          // Find the snapshot closest to N days ago
-          const snap = selectSnapshotByDate(snapshots, lookbackDate);
+          // Find the snapshot closest to N days ago, rejecting snapshots
+          // older than the prediction-age window so we don't score stale
+          // model outputs as if they were recent.
+          const snap = selectSnapshotByDate(snapshots, lookbackDate, minPredictionDate);
           if (!snap) continue;
 
           for (const m of markets) {
@@ -69,6 +76,11 @@ export async function handleBacktest(args: ParsedArgs): Promise<CLIResponse<Back
             const marketThen = perMarket?.marketProb ?? snap.market_probability;
             const marketNow = m.result === 'yes' ? 100 : 0;
             const edgePp = Math.round((modelProb - marketThen) * 10) / 10;
+
+            // Tradeable filters: skip contracts we couldn't actually trade.
+            // Price is marketThen (the price you'd transact at for a resolved bet).
+            if (m.volume_24h < minVolume) continue;
+            if (marketThen < minPrice || marketThen > maxPrice) continue;
 
             // P&L: Buy YES if edge > 0, Buy NO if edge < 0
             let pnl = 0;
@@ -115,14 +127,21 @@ export async function handleBacktest(args: ParsedArgs): Promise<CLIResponse<Back
 
       if (!report) continue;
 
-      // Get historical snapshot from N days ago for market_then
-      // Skip markets without a valid historical snapshot — using current price
-      // as market_then would make brier(market_then, market_now) ≈ 0
+      // Get historical snapshot from N days ago for market_then.
+      // Enforce a lower bound so we don't silently pull in predictions older
+      // than the prediction-age window. Skip markets without a valid
+      // historical snapshot — using current price as market_then would make
+      // brier(market_then, market_now) ≈ 0.
       const historyRow = db.query(
         `SELECT model_probability, market_probability, confidence_score, outcome_probabilities_json
-         FROM octagon_history WHERE event_ticker = $et AND captured_at <= $cutoff
+         FROM octagon_history
+         WHERE event_ticker = $et AND captured_at <= $cutoff AND captured_at >= $min_cutoff
          ORDER BY captured_at DESC LIMIT 1`,
-      ).get({ $et: m.event_ticker, $cutoff: lookbackDate.toISOString() }) as {
+      ).get({
+        $et: m.event_ticker,
+        $cutoff: lookbackDate.toISOString(),
+        $min_cutoff: minPredictionDate.toISOString(),
+      }) as {
         model_probability: number; market_probability: number;
         confidence_score: number | null; outcome_probabilities_json: string | null;
       } | null;
@@ -140,6 +159,11 @@ export async function handleBacktest(args: ParsedArgs): Promise<CLIResponse<Back
 
       const marketNow = m.market_prob * 100; // current Kalshi price (0-100)
       const edgePp = Math.round((modelProb - marketThen) * 10) / 10;
+
+      // Tradeable filters: price is marketNow (the current transactable
+      // price for an open position you'd take today).
+      if (m.volume_24h < minVolume) continue;
+      if (marketNow < minPrice || marketNow > maxPrice) continue;
 
       // M2M P&L
       let pnl = 0;

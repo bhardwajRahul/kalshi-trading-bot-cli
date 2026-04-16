@@ -32,9 +32,13 @@ export interface ParsedArgs {
   resolved: boolean;
   unresolved: boolean;
   days?: number;
+  maxAge?: number;
   category?: string;
   limit?: number;
   exportPath?: string;
+  minVolume?: number;
+  minPrice?: number;
+  maxPrice?: number;
   parseErrors: string[];
 }
 
@@ -61,6 +65,10 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): ParsedArgs {
   let category: string | undefined;
   let limit: number | undefined;
   let exportPath: string | undefined;
+  let maxAge: number | undefined;
+  let minVolume: number | undefined;
+  let minPrice: number | undefined;
+  let maxPrice: number | undefined;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -167,6 +175,34 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): ParsedArgs {
     } else if (arg === '--export') {
       const val = argv[++i];
       if (val != null) { exportPath = val; } else { parseErrors.push('--export requires a value'); }
+    } else if (arg === '--max-age') {
+      const raw = argv[++i];
+      if (raw != null) {
+        const numeric = Number(raw);
+        if (Number.isFinite(numeric) && numeric > 0) { maxAge = numeric; }
+        else { parseErrors.push(`Invalid --max-age value: "${raw}" (expected a positive number)`); }
+      } else { parseErrors.push('--max-age requires a value'); }
+    } else if (arg === '--min-volume') {
+      const raw = argv[++i];
+      if (raw != null) {
+        const numeric = Number(raw);
+        if (Number.isFinite(numeric) && numeric >= 0) { minVolume = numeric; }
+        else { parseErrors.push(`Invalid --min-volume value: "${raw}" (expected a non-negative number)`); }
+      } else { parseErrors.push('--min-volume requires a value'); }
+    } else if (arg === '--min-price') {
+      const raw = argv[++i];
+      if (raw != null) {
+        const numeric = Number(raw);
+        if (Number.isFinite(numeric) && numeric >= 0 && numeric <= 100) { minPrice = numeric; }
+        else { parseErrors.push(`Invalid --min-price value: "${raw}" (expected 0-100)`); }
+      } else { parseErrors.push('--min-price requires a value'); }
+    } else if (arg === '--max-price') {
+      const raw = argv[++i];
+      if (raw != null) {
+        const numeric = Number(raw);
+        if (Number.isFinite(numeric) && numeric >= 0 && numeric <= 100) { maxPrice = numeric; }
+        else { parseErrors.push(`Invalid --max-price value: "${raw}" (expected 0-100)`); }
+      } else { parseErrors.push('--max-price requires a value'); }
     } else if (arg.startsWith('--')) {
       parseErrors.push(`Unknown flag: ${arg}`);
     } else {
@@ -189,5 +225,5 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): ParsedArgs {
     positionalArgs.unshift(first);
   }
 
-  return { subcommand, positionalArgs, json, theme, ticker, interval, since, minConfidence, minEdge, side, live, refresh, report, dryRun, verbose, performance, resolved, unresolved, days, category, limit, exportPath, parseErrors };
+  return { subcommand, positionalArgs, json, theme, ticker, interval, since, minConfidence, minEdge, side, live, refresh, report, dryRun, verbose, performance, resolved, unresolved, days, maxAge, category, limit, exportPath, minVolume, minPrice, maxPrice, parseErrors };
 }

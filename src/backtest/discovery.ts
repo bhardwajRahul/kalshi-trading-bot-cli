@@ -11,6 +11,7 @@ export interface SettledMarket {
   close_time: string;
   series_category: string;
   last_price: number;         // last traded price (0-1)
+  volume_24h: number;         // 24-hour trading volume
 }
 
 export interface OpenMarket {
@@ -19,6 +20,7 @@ export interface OpenMarket {
   market_prob: number;        // current trading price (0-1)
   close_time: string;
   series_category: string;
+  volume_24h: number;         // 24-hour trading volume
 }
 
 /** Parse market price from Kalshi response (handles both cents and dollars formats). */
@@ -82,8 +84,10 @@ export async function discoverSettledMarkets(
   db: Database,
   opts?: { category?: string; days?: number },
 ): Promise<SettledMarket[]> {
-  // Filter to events with history AND close_time within the lookback window
-  let extraWhere = ' AND has_history = 1';
+  // Filter to events whose close_time falls within the lookback window.
+  // We deliberately do NOT gate on has_history: the flag is set at prefetch
+  // time and lags reality, so we rely on empty-data fallthrough later.
+  let extraWhere = '';
   if (opts?.days) {
     const cutoff = new Date(Date.now() - opts.days * 24 * 60 * 60 * 1000).toISOString();
     extraWhere += ` AND (close_time IS NULL OR close_time >= '${cutoff}')`;
@@ -106,6 +110,7 @@ export async function discoverSettledMarkets(
         close_time: m.close_time ?? '',
         series_category: cat ?? '',
         last_price: parsePrice(m),
+        volume_24h: typeof m.volume_24h === 'number' ? m.volume_24h : 0,
       });
     }
     return settled;
@@ -141,6 +146,7 @@ export async function discoverOpenMarkets(
         market_prob: marketProb,
         close_time: m.close_time ?? '',
         series_category: cat ?? '',
+        volume_24h: typeof m.volume_24h === 'number' ? m.volume_24h : 0,
       });
     }
     return open;

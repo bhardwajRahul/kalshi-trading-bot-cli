@@ -90,16 +90,21 @@ ${p}cancel <order_id>`,
 
 ${p}backtest                              30-day lookback, both sections (default)
 ${p}backtest --days 60                    60-day lookback
+${p}backtest --max-age 14                 Reject predictions older than 14 days (default = --days)
 ${p}backtest --resolved                   Resolved markets only
 ${p}backtest --unresolved                 Unresolved markets only
 ${p}backtest --category crypto            Filter by category
 ${p}backtest --min-edge 10                Stricter edge threshold (pp)
+${p}backtest --min-volume 10              Only contracts with ≥10 volume in last 24h (default 1)
+${p}backtest --min-price 5 --max-price 95 Tradeable price band 0-100 (defaults: 5 / 95)
 ${p}backtest --export results.csv         Per-market detail CSV
 ${p}backtest --json                       Machine-readable output
 
 Looks back N days, compares what the model said then to where the market is now.
 Resolved markets: scored against Kalshi settlement (0 or 100).
-Unresolved markets: mark-to-market vs current Kalshi trading price.`,
+Unresolved markets: mark-to-market vs current Kalshi trading price.
+Tradeable filters exclude contracts with zero recent volume or extreme prices,
+so reported ROI reflects what you could actually trade.`,
 
     'clear-cache': `**${ctx === 'cli' ? '' : 'bun start '}clear-cache** — Delete local cache
 
@@ -163,7 +168,8 @@ System:
   help [command]                Show help for a command
 
 Flags: --json, --refresh, --performance, --dry-run, --verbose
-Backtest flags: --days, --resolved, --unresolved, --category, --min-edge, --export
+Backtest flags: --days, --max-age, --resolved, --unresolved, --category, --min-edge,
+                --min-volume, --min-price, --max-price, --export
 Run "kalshi help <command>" for detailed usage.`;
   }
 

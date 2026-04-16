@@ -100,10 +100,14 @@ Type help for commands, or just ask a question.
 | `--interval <min>` | Scan interval in minutes (watch) |
 | `--live` | Force 15m scan interval (watch) |
 | `--days <n>` | Lookback period in days (backtest, default 30) |
+| `--max-age <n>` | Reject predictions older than N days (backtest, default = `--days`) |
 | `--resolved` | Resolved markets only (backtest) |
 | `--unresolved` | Open markets only (backtest) |
 | `--category <cat>` | Filter by category (backtest, search edge) |
 | `--limit <n>` | Max results to show (search edge, default 20) |
+| `--min-volume <n>` | Min 24h volume for a tradeable contract (backtest, default 1) |
+| `--min-price <n>` | Min contract price, 0-100 scale (backtest, default 5) |
+| `--max-price <n>` | Max contract price, 0-100 scale (backtest, default 95) |
 | `--export <path>` | Export per-market CSV (backtest) |
 
 ### Backtesting
@@ -116,9 +120,11 @@ Does the model find real edge? Look back N days, compare what the model said the
 ```bash
 bun start backtest                              # 30-day lookback (default)
 bun start backtest --days 60                    # 60-day lookback
+bun start backtest --max-age 14                 # only score predictions <=14d old
 bun start backtest --resolved                   # resolved only
 bun start backtest --unresolved --min-edge 10   # unresolved, 10pp threshold
 bun start backtest --category crypto            # filter by category
+bun start backtest --min-volume 10 --min-price 5 --max-price 95   # tradeable contracts only
 bun start backtest --export results.csv         # per-market detail
 ```
 

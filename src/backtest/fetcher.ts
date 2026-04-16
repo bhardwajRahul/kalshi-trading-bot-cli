@@ -112,21 +112,34 @@ export async function fetchEventHistory(
  * Fetch event history and cache it in the local octagon_history table.
  * Only uses the cache for full-history requests (no time window).
  * When capturedFrom/capturedTo are provided, always fetches fresh from the API.
+ *
+ * If `maxAgeDays` is supplied, the cache is considered stale when the newest
+ * cached snapshot is older than that window, and we refetch from the API so
+ * new snapshots show up. `INSERT OR IGNORE` keeps old rows intact.
  */
 export async function fetchAndCacheHistory(
   db: Database,
   eventTicker: string,
-  opts?: { capturedFrom?: string; capturedTo?: string; days?: number },
+  opts?: { capturedFrom?: string; capturedTo?: string; days?: number; maxAgeDays?: number },
 ): Promise<HistorySnapshot[]> {
   const hasWindow = !!(opts?.capturedFrom || opts?.capturedTo);
 
   // Only use cache for full-history requests (no time window filter)
   if (!hasWindow) {
     const cached = db.query(
-      'SELECT COUNT(*) as cnt FROM octagon_history WHERE event_ticker = $et',
-    ).get({ $et: eventTicker }) as { cnt: number };
+      'SELECT COUNT(*) as cnt, MAX(captured_at) as newest FROM octagon_history WHERE event_ticker = $et',
+    ).get({ $et: eventTicker }) as { cnt: number; newest: string | null };
 
-    if (cached.cnt > 0) {
+    let cacheFresh = cached.cnt > 0;
+    if (cacheFresh && opts?.maxAgeDays && cached.newest) {
+      const newestEpoch = new Date(cached.newest).getTime();
+      const cutoffEpoch = Date.now() - opts.maxAgeDays * 24 * 60 * 60 * 1000;
+      if (Number.isFinite(newestEpoch) && newestEpoch < cutoffEpoch) {
+        cacheFresh = false; // newest snapshot is older than the lookback window
+      }
+    }
+
+    if (cacheFresh) {
       const rows = db.query(
         `SELECT history_id, event_ticker, captured_at, name, series_category,
                 confidence_score, model_probability, market_probability, edge_pp, close_time,
@@ -173,6 +186,21 @@ export async function fetchAndCacheHistory(
         });
       }
     })();
+
+    // Re-read merged cache so callers see old snapshots that may have been
+    // stored on a previous fetch but omitted from this API response.
+    const merged = db.query(
+      `SELECT history_id, event_ticker, captured_at, name, series_category,
+              confidence_score, model_probability, market_probability, edge_pp, close_time,
+              outcome_probabilities_json
+       FROM octagon_history WHERE event_ticker = $et ORDER BY captured_at ASC`,
+    ).all({ $et: eventTicker }) as HistorySnapshot[];
+    for (const r of merged) {
+      if (r.outcome_probabilities_json) {
+        try { r.outcome_probabilities = JSON.parse(r.outcome_probabilities_json); } catch { /* skip */ }
+      }
+    }
+    return merged;
   }
 
   return snapshots;
@@ -181,19 +209,24 @@ export async function fetchAndCacheHistory(
 /**
  * Select the snapshot closest to a target date (N days ago).
  * Returns the last snapshot captured on or before the target date.
+ * If `minDate` is provided, snapshots older than that are rejected — this
+ * prevents a 30-day lookback from silently using a 60-day-old prediction
+ * when the event has no fresh snapshot within the window.
  * Probabilities in the returned snapshot are percentages (0-100).
  */
 export function selectSnapshotByDate(
   snapshots: HistorySnapshot[],
   targetDate: Date,
+  minDate?: Date,
 ): HistorySnapshot | null {
   const targetEpoch = targetDate.getTime();
+  const minEpoch = minDate ? minDate.getTime() : -Infinity;
 
   let best: HistorySnapshot | null = null;
   let bestEpoch = -Infinity;
   for (const s of snapshots) {
     const capturedEpoch = new Date(s.captured_at).getTime();
-    if (capturedEpoch <= targetEpoch && capturedEpoch > bestEpoch) {
+    if (capturedEpoch <= targetEpoch && capturedEpoch >= minEpoch && capturedEpoch > bestEpoch) {
       best = s;
       bestEpoch = capturedEpoch;
     }
