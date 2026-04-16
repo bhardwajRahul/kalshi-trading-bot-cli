@@ -11,7 +11,7 @@ export interface SettledMarket {
   close_time: string;
   series_category: string;
   last_price: number;         // last traded price (0-1)
-  volume_24h: number;         // 24-hour trading volume
+  volume: number;             // lifetime trading volume (used for tradeability gate)
 }
 
 export interface OpenMarket {
@@ -20,7 +20,8 @@ export interface OpenMarket {
   market_prob: number;        // current trading price (0-1)
   close_time: string;
   series_category: string;
-  volume_24h: number;         // 24-hour trading volume
+  volume: number;             // lifetime trading volume (tradeability gate)
+  volume_24h: number;         // 24-hour volume (liquidity-now gate)
 }
 
 /** Parse market price from Kalshi response (handles both cents and dollars formats). */
@@ -28,6 +29,20 @@ function parsePrice(m: KalshiMarket): number {
   const dollars = parseFloat(m.last_price_dollars ?? '');
   if (Number.isFinite(dollars)) return dollars;
   return typeof m.last_price === 'number' ? m.last_price / 100 : 0;
+}
+
+/** Parse lifetime volume (prefers volume_fp string from new API). */
+function parseVolume(m: KalshiMarket): number {
+  const fp = parseFloat(m.volume_fp ?? '');
+  if (Number.isFinite(fp)) return fp;
+  return typeof m.volume === 'number' ? m.volume : 0;
+}
+
+/** Parse 24h volume (prefers volume_24h_fp string from new API). */
+function parseVolume24h(m: KalshiMarket): number {
+  const fp = parseFloat(m.volume_24h_fp ?? '');
+  if (Number.isFinite(fp)) return fp;
+  return typeof m.volume_24h === 'number' ? m.volume_24h : 0;
 }
 
 /** Fetch event markets from Kalshi, returning empty array on error. */
@@ -110,7 +125,7 @@ export async function discoverSettledMarkets(
         close_time: m.close_time ?? '',
         series_category: cat ?? '',
         last_price: parsePrice(m),
-        volume_24h: typeof m.volume_24h === 'number' ? m.volume_24h : 0,
+        volume: parseVolume(m),
       });
     }
     return settled;
@@ -146,7 +161,8 @@ export async function discoverOpenMarkets(
         market_prob: marketProb,
         close_time: m.close_time ?? '',
         series_category: cat ?? '',
-        volume_24h: typeof m.volume_24h === 'number' ? m.volume_24h : 0,
+        volume: parseVolume(m),
+        volume_24h: parseVolume24h(m),
       });
     }
     return open;

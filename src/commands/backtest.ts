@@ -78,8 +78,9 @@ export async function handleBacktest(args: ParsedArgs): Promise<CLIResponse<Back
             const edgePp = Math.round((modelProb - marketThen) * 10) / 10;
 
             // Tradeable filters: skip contracts we couldn't actually trade.
+            // Use lifetime volume (24h volume drops to 0 after settlement).
             // Price is marketThen (the price you'd transact at for a resolved bet).
-            if (m.volume_24h < minVolume) continue;
+            if (m.volume < minVolume) continue;
             if (marketThen < minPrice || marketThen > maxPrice) continue;
 
             // P&L: Buy YES if edge > 0, Buy NO if edge < 0
@@ -161,8 +162,9 @@ export async function handleBacktest(args: ParsedArgs): Promise<CLIResponse<Back
       const edgePp = Math.round((modelProb - marketThen) * 10) / 10;
 
       // Tradeable filters: price is marketNow (the current transactable
-      // price for an open position you'd take today).
-      if (m.volume_24h < minVolume) continue;
+      // price for an open position you'd take today). Use lifetime volume
+      // so the same gate works for both resolved and open contracts.
+      if (m.volume < minVolume) continue;
       if (marketNow < minPrice || marketNow > maxPrice) continue;
 
       // M2M P&L

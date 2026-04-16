@@ -95,7 +95,7 @@ ${p}backtest --resolved                   Resolved markets only
 ${p}backtest --unresolved                 Unresolved markets only
 ${p}backtest --category crypto            Filter by category
 ${p}backtest --min-edge 10                Stricter edge threshold (pp)
-${p}backtest --min-volume 10              Only contracts with ≥10 volume in last 24h (default 1)
+${p}backtest --min-volume 10              Only contracts with ≥10 lifetime volume (default 1)
 ${p}backtest --min-price 5 --max-price 95 Tradeable price band 0-100 (defaults: 5 / 95)
 ${p}backtest --export results.csv         Per-market detail CSV
 ${p}backtest --json                       Machine-readable output

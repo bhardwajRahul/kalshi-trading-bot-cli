@@ -105,7 +105,7 @@ Type help for commands, or just ask a question.
 | `--unresolved` | Open markets only (backtest) |
 | `--category <cat>` | Filter by category (backtest, search edge) |
 | `--limit <n>` | Max results to show (search edge, default 20) |
-| `--min-volume <n>` | Min 24h volume for a tradeable contract (backtest, default 1) |
+| `--min-volume <n>` | Min lifetime volume for a tradeable contract (backtest, default 1) |
 | `--min-price <n>` | Min contract price, 0-100 scale (backtest, default 5) |
 | `--max-price <n>` | Max contract price, 0-100 scale (backtest, default 95) |
 | `--export <path>` | Export per-market CSV (backtest) |
