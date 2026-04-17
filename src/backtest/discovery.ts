@@ -94,20 +94,18 @@ async function parallelMap<T, R>(
 
 /**
  * Discover settled Kalshi markets that have Octagon coverage with history.
+ *
+ * No close_time filter: the backtest's prediction-age window is enforced
+ * downstream via `selectSnapshotByDate`. Filtering on close_time here would
+ * wrongly exclude events that closed before the lookback window but whose
+ * predictions were still made within the prediction-age window (they'd still
+ * have outcomes to score against).
  */
 export async function discoverSettledMarkets(
   db: Database,
-  opts?: { category?: string; days?: number },
+  opts?: { category?: string },
 ): Promise<SettledMarket[]> {
-  // Filter to events whose close_time falls within the lookback window.
-  // We deliberately do NOT gate on has_history: the flag is set at prefetch
-  // time and lags reality, so we rely on empty-data fallthrough later.
-  let extraWhere = '';
-  if (opts?.days) {
-    const cutoff = new Date(Date.now() - opts.days * 24 * 60 * 60 * 1000).toISOString();
-    extraWhere += ` AND (close_time IS NULL OR close_time >= '${cutoff}')`;
-  }
-  const { query, params } = buildEventQuery(extraWhere, opts?.category);
+  const { query, params } = buildEventQuery('', opts?.category);
   const events = db.query(query).all(params) as Array<{ event_ticker: string; category: string | null }>;
 
   const batchResults = await parallelMap(events, async ({ event_ticker, category: cat }) => {

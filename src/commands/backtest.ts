@@ -78,7 +78,7 @@ export async function handleBacktest(args: ParsedArgs): Promise<CLIResponse<Back
   // ─── RESOLVED: settled markets with historical Octagon snapshots ────────
   if (!args.unresolved) {
     try {
-      const settled = await discoverSettledMarkets(db, { category: args.category, days });
+      const settled = await discoverSettledMarkets(db, { category: args.category });
 
       if (settled.length > 0) {
         // Group by event_ticker to batch history fetches
@@ -171,46 +171,33 @@ export async function handleBacktest(args: ParsedArgs): Promise<CLIResponse<Back
   if (!args.resolved) {
     const openMarkets = await discoverOpenMarkets(db, { category: args.category });
 
+    // Group by event_ticker to batch history fetches (same as resolved path).
+    const openByEvent = new Map<string, typeof openMarkets>();
     for (const m of openMarkets) {
-      // Get Octagon report from local cache
-      const report = db.query(
-        "SELECT model_prob, confidence_score, outcome_probabilities_json FROM octagon_reports WHERE event_ticker = $et AND variant_used = 'events-api' ORDER BY fetched_at DESC LIMIT 1",
-      ).get({ $et: m.event_ticker }) as { model_prob: number; confidence_score: number | null; outcome_probabilities_json: string | null } | null;
+      const arr = openByEvent.get(m.event_ticker) ?? [];
+      arr.push(m);
+      openByEvent.set(m.event_ticker, arr);
+    }
 
-      if (!report) continue;
-
-      // Get historical snapshot from N days ago for market_then.
-      // Enforce a lower bound so we don't silently pull in predictions older
-      // than the prediction-age window. Skip markets without a valid
-      // historical snapshot — using current price as market_then would make
-      // brier(market_then, market_now) ≈ 0.
-      const historyRow = db.query(
-        `SELECT model_probability, market_probability, confidence_score, outcome_probabilities_json
-         FROM octagon_history
-         WHERE event_ticker = $et AND captured_at <= $cutoff AND captured_at >= $min_cutoff
-         ORDER BY captured_at DESC LIMIT 1`,
-      ).get({
-        $et: m.event_ticker,
-        $cutoff: lookbackDate.toISOString(),
-        $min_cutoff: minPredictionDate.toISOString(),
-      }) as {
-        model_probability: number; market_probability: number;
-        confidence_score: number | null; outcome_probabilities_json: string | null;
-      } | null;
-
-      if (!historyRow) continue; // No snapshot old enough — skip this market
-
-      let outcomes: OutcomeProbability[] | null = null;
-      if (historyRow.outcome_probabilities_json) {
-        try { outcomes = JSON.parse(historyRow.outcome_probabilities_json); } catch { /* skip */ }
+    for (const [eventTicker, markets] of openByEvent) {
+      let snapshots;
+      try {
+        snapshots = await fetchAndCacheHistory(db, eventTicker, { maxAgeDays });
+      } catch (err) {
+        if (err instanceof SubscriptionRequiredError) throw err;
+        continue;
       }
+      const snap = selectSnapshotByDate(snapshots, lookbackDate, minPredictionDate);
+      if (!snap) continue;
+
+      for (const m of markets) {
       // Strict per-contract extraction — no event-level fallback.
-      const perMarket = findOutcomeProb(outcomes, m.ticker);
+      const perMarket = findOutcomeProb(snap.outcome_probabilities, m.ticker);
       if (!perMarket) continue;
       const modelProb = perMarket.model_probability;
       const marketThen = perMarket.market_probability;
       if (!Number.isFinite(modelProb) || !Number.isFinite(marketThen)) continue;
-      const confidenceScore = historyRow.confidence_score ?? report.confidence_score ?? 0;
+      const confidenceScore = snap.confidence_score ?? 0;
 
       const marketNow = m.market_prob * 100; // current Kalshi price (0-100)
       const edgePp = Math.round((modelProb - marketThen) * 10) / 10;
@@ -250,6 +237,7 @@ export async function handleBacktest(args: ParsedArgs): Promise<CLIResponse<Back
         confidence_score: confidenceScore,
         close_time: m.close_time,
       });
+      }
     }
   }
 
