@@ -5,6 +5,7 @@
   "type": "module",
   "main": "src/index.tsx",
   "bin": {
+    "kalshi": "./src/index.tsx",
     "kalshi-trading-bot-cli": "./src/index.tsx",
     "kalshi-deep-trading-bot": "./src/index.tsx"
   },

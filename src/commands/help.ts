@@ -142,6 +142,7 @@ Discovery:
   search [theme|ticker|query]   Find markets by keyword or theme
   search --refresh <query>      Force index rebuild then search
   search themes                 List all themes and subcategories
+  search edge [--min-edge N]    Scan all markets by Octagon model edge
   watch <ticker>                Live price/orderbook feed
   watch --theme <theme>         Continuous theme scan (Ctrl+C to stop)
   watch --refresh               Force index rebuild before watching
@@ -187,6 +188,7 @@ Discovery:
   /search [theme|ticker|query]   Find markets by keyword or theme
   /search --refresh <query>      Force index rebuild then search
   /search themes                 List all themes and subcategories
+  /search edge [--min-edge N]    Scan all markets by Octagon model edge
   /watch <ticker>                Live price/orderbook feed
   /watch --theme <theme>         Continuous theme scan (Esc to stop)
   /watch --refresh               Force index rebuild before watching
