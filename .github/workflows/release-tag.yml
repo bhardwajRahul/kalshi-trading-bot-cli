@@ -33,6 +33,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           VERSION="v${{ steps.version.outputs.current }}"
+          # Skip if tag already exists (e.g. cut from a feature branch before merge)
+          if git ls-remote --exit-code --tags origin "$VERSION" >/dev/null 2>&1; then
+            echo "Tag $VERSION already exists on origin — skipping."
+            exit 0
+          fi
           git tag "$VERSION"
           git push origin "$VERSION"
           gh release create "$VERSION" --generate-notes --title "$VERSION"
