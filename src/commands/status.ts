@@ -1,6 +1,6 @@
 import { callKalshiApi } from '../tools/kalshi/api.js';
-import { PROVIDERS } from '@/providers';
-import { getDefaultModelForProvider } from '@/utils/model';
+import { PROVIDERS } from '../providers.js';
+import { getDefaultModelForProvider } from '../utils/model.js';
 
 /**
  * Verify setup: check API keys, exchange connectivity, and optional services.

@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { resolve } from 'path';
 import { config } from 'dotenv';
-import { getProviderById } from '@/providers';
+import { getProviderById } from '../providers.js';
 import { appPath, getAppDir } from './paths.js';
 
 // Resolve .env from a CWD override (dev workflow) or the home config dir
