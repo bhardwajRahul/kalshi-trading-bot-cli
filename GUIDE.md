@@ -19,7 +19,7 @@ AI-powered prediction market terminal for [Kalshi](https://kalshi.com). Ask natu
 ### Setup
 
 ```bash
-bunx kalshi-trading-bot-cli
+bunx kalshi-trading-bot-cli@latest
 ```
 
 That's it — no clone required. The setup wizard runs automatically on first launch and writes your API keys to `~/.kalshi-bot/.env`.

@@ -21,7 +21,7 @@ Integrates with the [Octagon Research API](https://app.octagonai.co) for AI-gene
 ## Quick Start
 
 ```bash
-bunx kalshi-trading-bot-cli
+bunx kalshi-trading-bot-cli@latest
 ```
 
 That's it — no clone, no install. The setup wizard runs automatically on first launch and walks you through API keys.
@@ -46,7 +46,7 @@ bun start
 ## Example Session
 
 ```
-$ bunx kalshi-trading-bot-cli
+$ bunx kalshi-trading-bot-cli@latest
 
 Welcome to Kalshi Trading Bot CLI
 Type help for commands, or just ask a question.
@@ -344,7 +344,7 @@ TELEMETRY_ENABLED=false
 Or set the environment variable before running:
 
 ```bash
-TELEMETRY_ENABLED=false bunx kalshi-trading-bot-cli
+TELEMETRY_ENABLED=false bunx kalshi-trading-bot-cli@latest
 ```
 
 ## Documentation
