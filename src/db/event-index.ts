@@ -94,26 +94,50 @@ export function searchEventIndex(
 }
 
 /**
- * Parse markets_json, drop markets that aren't currently active, and re-serialize.
+ * Predicate shared by every call site that filters expired markets.
  * "Active" means status in ('open','active') AND (no close_time or close_time > now).
- * Returns the original string on parse failure.
+ */
+function isActiveMarketRecord(record: Record<string, unknown>, nowIso: string): boolean {
+  const status = record.status;
+  if (status !== 'open' && status !== 'active') return false;
+  const closeTime = record.close_time;
+  if (closeTime != null && typeof closeTime === 'string' && closeTime <= nowIso) return false;
+  return true;
+}
+
+/**
+ * Parse markets_json from the index into an array of object records.
+ * Returns [] on parse failure or non-array payloads, and drops any non-object entries.
+ */
+function parseMarketsJsonSafe(markets_json: string | null): Array<Record<string, unknown>> {
+  if (!markets_json) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(markets_json);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+  return parsed.filter((m): m is Record<string, unknown> => typeof m === 'object' && m !== null);
+}
+
+/**
+ * Parse markets_json, drop markets that aren't currently active, and re-serialize.
+ * Returns the original string on parse failure (so callers don't lose data they could re-parse).
  */
 function filterActiveMarketsJson(markets_json: string | null, nowIso: string): string | null {
   if (!markets_json) return markets_json;
-  let markets: Array<Record<string, unknown>>;
+  let parsed: unknown;
   try {
-    markets = JSON.parse(markets_json);
+    parsed = JSON.parse(markets_json);
   } catch {
     return markets_json;
   }
-  if (!Array.isArray(markets)) return markets_json;
-  const active = markets.filter((m) => {
-    const status = m.status;
-    if (status !== 'open' && status !== 'active') return false;
-    const closeTime = m.close_time;
-    if (closeTime != null && typeof closeTime === 'string' && closeTime <= nowIso) return false;
-    return true;
-  });
+  if (!Array.isArray(parsed)) return markets_json;
+  const active = parsed.filter(
+    (m): m is Record<string, unknown> =>
+      typeof m === 'object' && m !== null && isActiveMarketRecord(m as Record<string, unknown>, nowIso),
+  );
   return JSON.stringify(active);
 }
 
@@ -310,33 +334,22 @@ export function getEventsFromIndex(
     )
     .all(...eventTickers) as IndexedEvent[];
 
-  return rows
-    .map((r) => {
-      let markets: any[] = [];
-      try {
-        markets = r.markets_json ? JSON.parse(r.markets_json) : [];
-      } catch {
-        // Corrupted markets_json — skip markets for this event
-      }
-      if (!includeExpired && Array.isArray(markets)) {
-        markets = markets.filter((m: any) => {
-          if (m?.status !== 'open' && m?.status !== 'active') return false;
-          const ct = m?.close_time;
-          if (ct != null && typeof ct === 'string' && ct <= nowIso) return false;
-          return true;
-        });
-      }
-      return {
-        event_ticker: r.event_ticker,
-        series_ticker: r.series_ticker ?? '',
-        title: r.title,
-        category: r.category ?? '',
-        sub_title: r.sub_title ?? '',
-        strike_date: r.strike_date ?? '',
-        mutually_exclusive: false,
-        markets,
-      } as KalshiEvent;
-    });
+  return rows.map((r) => {
+    let markets = parseMarketsJsonSafe(r.markets_json);
+    if (!includeExpired) {
+      markets = markets.filter((m) => isActiveMarketRecord(m, nowIso));
+    }
+    return {
+      event_ticker: r.event_ticker,
+      series_ticker: r.series_ticker ?? '',
+      title: r.title,
+      category: r.category ?? '',
+      sub_title: r.sub_title ?? '',
+      strike_date: r.strike_date ?? '',
+      mutually_exclusive: false,
+      markets: markets as unknown as KalshiMarket[],
+    } as KalshiEvent;
+  });
 }
 
 /**
@@ -354,14 +367,9 @@ export function getTopEventsByVolume(db: Database, limit: number): KalshiEvent[]
 
   const events: Array<{ event: KalshiEvent; totalVolume: number }> = [];
   for (const r of rows) {
-    let markets: any[] = [];
-    try {
-      markets = r.markets_json ? JSON.parse(r.markets_json) : [];
-    } catch {
-      // Corrupted markets_json — treat as no markets
-    }
+    const markets = parseMarketsJsonSafe(r.markets_json);
     const totalVolume = markets.reduce(
-      (sum: number, m: any) => sum + (parseFloat(m.volume) || parseFloat(m.volume_fp) || 0),
+      (sum, m) => sum + (parseFloat(String(m.volume ?? '')) || parseFloat(String(m.volume_fp ?? '')) || 0),
       0,
     );
     events.push({
@@ -373,7 +381,7 @@ export function getTopEventsByVolume(db: Database, limit: number): KalshiEvent[]
         sub_title: r.sub_title ?? '',
         strike_date: r.strike_date ?? '',
         mutually_exclusive: false,
-        markets,
+        markets: markets as unknown as KalshiMarket[],
       } as KalshiEvent,
       totalVolume,
     });
