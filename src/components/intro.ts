@@ -68,6 +68,15 @@ export class IntroComponent extends Container {
     this.addChild(new Spacer(1));
     const cmd = (label: string) => theme.muted(label.padEnd(11));
     this.addChild(new Text(cmd('/search') + 'Search events by theme, ticker, or free-text; /search edge for edge scan', 0, 0));
+    this.addChild(new Text(cmd('/similar') + '<ticker|"text">  Semantic neighbors (Octagon embeddings)', 0, 0));
+    this.addChild(new Text(cmd('/clusters') + '[--ranked|--behavioral]  Browse thematic & behavioral clusters', 0, 0));
+    this.addChild(new Text(cmd('/peers') + '<ticker>  Markets in the same cluster', 0, 0));
+    this.addChild(new Text(cmd('/events') + '[ticker]  Octagon events + outcome ladder', 0, 0));
+    this.addChild(new Text(cmd('/series') + '[ticker]  Series rollup; /series candles <SERIES> for NAV', 0, 0));
+    this.addChild(new Text(cmd('/themes') + 'list|show|report|audit|overlap  Editorial narrative registry', 0, 0));
+    this.addChild(new Text(cmd('/catalysts') + 'upcoming --days N  Markets closing soon, grouped by week', 0, 0));
+    this.addChild(new Text(cmd('/correlate') + '<t1> <t2> [...]  Pairwise correlation matrix', 0, 0));
+    this.addChild(new Text(cmd('/basket') + 'build|backtest|size|candles|validate  Diversified basket tools', 0, 0));
     this.addChild(new Text(cmd('/portfolio') + 'Overview, positions, orders, balance, status', 0, 0));
     this.addChild(new Text(cmd('/analyze') + '<ticker>  Full analysis: edge, research, Kelly sizing', 0, 0));
     this.addChild(new Text(cmd('/watch') + '<ticker>  Live price/orderbook feed', 0, 0));

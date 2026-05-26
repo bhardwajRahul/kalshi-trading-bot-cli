@@ -80,7 +80,7 @@ Type `/model` to pick your LLM provider and model. Your choice persists across s
 
 ## Slash Commands
 
-Quick commands that bypass the AI agent and call the Kalshi API directly.
+Quick commands that bypass the AI agent and call the Kalshi or Octagon API directly.
 
 | Command | Description | Example |
 |---|---|---|
@@ -91,6 +91,33 @@ Quick commands that bypass the AI agent and call the Kalshi API directly.
 | `/orders` | Resting (open) orders | `/orders` |
 | `/markets [series]` | Browse markets, optionally filter by series ticker | `/markets KXBTC` |
 | `/market <ticker>` | Market detail + top-of-book orderbook | `/market KXBTC-26MAR-B80000` |
+| `/search <query>` | Full-text market search (Octagon when key set) | `/search "bitcoin price" --min-volume 10000` |
+| `/search edge` | Edge ranking from Octagon's latest run | `/search edge --min-edge 5 --sort-by total_volume` |
+| `/similar <ticker\|"text">` | Semantic neighbors via embeddings | `/similar KXBTCD-26DEC31-T100000 --top-k 20` |
+| `/clusters [--label X]` | Browse thematic clusters | `/clusters --label fed` |
+| `/clusters <id>` | List markets inside a cluster | `/clusters 42` |
+| `/clusters --behavioral` | Behavioral clusters by 30-day return vectors | `/clusters --behavioral` |
+| `/clusters --ranked` | Rank clusters by historical basket return | `/clusters --ranked --timeframe 1y --min-return 0.2` |
+| `/peers <ticker>` | Markets in the same cluster | `/peers KXBTCD-... --limit 50` |
+| `/correlate <t1> <t2> [...]` | Pairwise correlation matrix | `/correlate KX-A KX-B KX-C --window-days 90` |
+| `/basket build` | Diversified basket (cluster + correlation caps) | `/basket build --category crypto -n 8 --max-corr 0.6` |
+| `/basket backtest` | Total return / Sharpe / max DD on a basket | `/basket backtest --tickers KX-A,KX-B --timeframe 1y` |
+| `/basket backtest --theme <name>` | Backtest an editorial theme NAV | `/basket backtest --theme "Iran Escalation"` |
+| `/basket size` | Fractional Kelly sizing for picked legs | `/basket size --bankroll 1000 --kelly 0.25 --probs KX-A:0.62` |
+| `/basket size --auto-probs` | Auto-fetch probabilities via `markets/edge` | `/basket size --auto-probs --theme "AI Race Milestones" --bankroll 1000` |
+| `/basket validate` | Portfolio diagnostics (clusters, corr, clashes, warnings) | `/basket validate --theme "Iran Escalation" --bankroll 1000` |
+| `/basket candles` | OHLC bars for a weighted basket NAV | `/basket candles --tickers KX-A,KX-B --timeframe 6m` |
+| `/series events <ticker>` | Events inside a series | `/series events KXIPO` |
+| `/correlate --sides yes,no` | Side-aware correlation (sign-flipped) | `/correlate KX-A KX-B --sides yes,no` |
+| `/correlate --cells` | Cell detail (overlap_count, reason) | `/correlate KX-A KX-B --cells` |
+| `/events` / `/events <ticker>` | Octagon events + outcome ladder | `/events KXFEDCHAIRNOM-29` |
+| `/series` / `/series <ticker>` | Kalshi series rollup | `/series KXBTCD` |
+| `/series candles <ticker>` | Series-level NAV | `/series candles KXBTCD --timeframe 3m` |
+| `/catalysts upcoming` | Markets closing soon, grouped by week | `/catalysts upcoming --days 14` |
+| `/themes` (registry) | Editorial narrative buckets | `/themes show "Iran Escalation"` |
+| `/themes report` | 25-theme dashboard with SEO + liquidity | `/themes report` |
+| `/themes audit` | Flag dead themes (high SEO + zero volume) | `/themes audit` |
+| `/themes overlap` | Cross-theme dedupe report | `/themes overlap` |
 | `/buy <ticker> <count> [price]` | Buy YES contracts (price in cents) | `/buy KXBTC-26MAR-B80000 5 56` |
 | `/sell <ticker> <count> [price]` | Sell YES contracts | `/sell KXBTC-26MAR-B80000 5 60` |
 | `/cancel <order_id>` | Cancel a resting order | `/cancel abc-123-def` |
@@ -98,6 +125,186 @@ Quick commands that bypass the AI agent and call the Kalshi API directly.
 **Trade confirmation:** `/buy` and `/sell` always show a confirmation prompt before executing. Type `yes` to confirm or `no` to cancel.
 
 **Price format:** Prices are always in cents. `56` = $0.56 = 56% implied probability.
+
+---
+
+## Discovery & Portfolio (Octagon-powered)
+
+With `OCTAGON_API_KEY` set, the bot routes searches through Octagon's typed Kalshi endpoints. This unlocks semantic similarity, thematic and behavioral clustering, pairwise correlation matrices, and one-call diversified basket construction. Without a key the bot falls back to the local SQLite index for `/search` and `/search edge`; the other commands require the key.
+
+### `/search` and `/search edge`
+
+```bash
+# Server-side full-text + structured filter
+kalshi search "bitcoin price" --category crypto --min-volume 10000 --limit 20
+
+# Edge ranking from Octagon's latest events run
+kalshi search edge --min-edge 5 --limit 10 --sort-by total_volume
+kalshi search edge --category politics --sort-by edge_pp
+```
+
+Flags (server-side path): `--category`, `--series <ticker>`, `--min-volume <n>`, `--close-before <iso>`, `--limit <n>`, `--sort-by <edge_pp|expected_return|total_volume|model_probability>`.
+
+### `/similar`
+
+Catches semantic matches keyword search misses ("Will Bitcoin pierce six figures" ↔ "BTC > $100k").
+
+```bash
+kalshi similar KXBTCD-26DEC31-T100000 --top-k 25                # anchor by ticker (no embedding call)
+kalshi similar -q "Will Bitcoin pierce six figures" --category crypto
+kalshi similar -q "ETH 2.0 staking" --category crypto --min-volume 10000 --close-before 2026-08-19T00:00:00Z
+```
+
+Lower `distance` = closer cosine similarity.
+
+### `/clusters`
+
+```bash
+kalshi clusters                              # thematic clusters, with sample titles
+kalshi clusters --label fed                  # find Fed-decision clusters
+kalshi clusters 42                           # markets in cluster 42 (by distance)
+kalshi clusters --behavioral                 # behavioral clusters (mean return + volatility)
+kalshi clusters --ranked --timeframe 1y --min-return 0.20 --top-k 5
+```
+
+### `/peers`
+
+One-call "show me others in the same theme" — replaces the two-step `/clusters` lookup → `/clusters <id>` dance.
+
+```bash
+kalshi peers KXBTCD-26DEC31-T100000 --limit 50      # thematic peers (default)
+kalshi peers KXBTCD-26DEC31-T100000 --behavioral    # behavioral peers
+kalshi peers KXBTCD-26DEC31-T100000 --show-cluster  # only print cluster membership
+```
+
+### `/correlate`
+
+```bash
+kalshi correlate KXBTCD-... KXETHU-... KXSOL-... --window-days 90
+```
+
+Returns the NxN matrix plus a `ranked_pairs` array sorted ascending — most-uncorrelated pairs first.
+
+### `/basket build`
+
+Pulls a candidate universe, computes correlations, greedily selects legs respecting both `--max-per-cluster` and `--max-corr`, then sizes them. Pass `--bankroll` + `--kelly` + `--probs` for Kelly sizing, omit for equal-weight.
+
+```bash
+# 8-leg crypto basket, Kelly-sized
+kalshi basket build --category crypto --min-volume 10000 \
+  -n 8 --max-per-cluster 2 --max-corr 0.6 \
+  --bankroll 1000 --kelly 0.25 \
+  --probs KXBTCD-...:0.62,KXETHU-...:0.58
+
+# 5 uncorrelated bets on macro themes
+kalshi basket build --label fed,cpi,fomc,gdp,jobs \
+  -n 5 --max-per-cluster 1 --max-corr 0.4
+```
+
+### `/basket backtest` / `/basket candles`
+
+```bash
+kalshi basket backtest --tickers KX-A,KX-B,KX-C --weights 0.4,0.4,0.2 --timeframe 1y
+kalshi basket candles  --tickers KX-A,KX-B --timeframe 6m --json
+```
+
+Read `summary.total_return`, `summary.sharpe`, `summary.max_drawdown` directly. Annualization uses calendar seconds (Kalshi trades 24/7), not 252 trading days.
+
+### `/basket size`
+
+Kelly-size legs you've already picked. Probabilities are 0–1 fractions.
+
+```bash
+kalshi basket size --bankroll 1000 --kelly 0.25 \
+  --probs KX-A:0.62,KX-B:0.55 --side yes
+```
+
+The server looks up live `yes_bid`/`no_bid` for each leg to compute edge and Kelly fraction. Legs with no edge (`prob < price`) get `kelly_fraction = 0`.
+
+### Editorial Themes — narrative registry
+
+Editorial themes are user-curated narrative buckets (e.g. "AI Race Milestones", "Iran Escalation") that map to lists of Kalshi series. Distinct from Octagon's ML clusters — these are *narratives* you define. The bot ships with a 25-theme seed dataset at `data/themes_seo.json` derived from monthly search-demand research.
+
+```bash
+# Seed the registry from the included starter file (25 themes, ~170 series)
+kalshi themes import
+kalshi themes list
+
+# Drill into one
+kalshi themes show "Iran Escalation"
+#  Description    Hormuz traffic, US-Iran nuclear deal, oil & gas price ladders
+#  Search volume  1.1M/month
+#  Series         12 mapped
+#  KXAAAGASD, KXAAAGASM, KXAAAGASMAX, KXBRENTW, KXHORMUZNORM, KXUSAIRANAGREEMENT, ...
+
+# THE dashboard view — 25-theme grid with SEO + liquidity
+kalshi themes report
+
+# Identify dead themes (high SEO but no Kalshi inventory)
+kalshi themes audit
+#   Status keys:
+#     STALE         — high SEO, all series exist but 0 active markets
+#     NO_INVENTORY  — high SEO, no series mapped at all
+#     THIN          — active markets but <$1000/day volume
+#     TRADEABLE     — ready to act on
+
+# Cross-theme dedupe — same series in two themes
+kalshi themes overlap
+#   KXUSAIRANAGREEMENT  Iran Escalation · Nuclear Renaissance
+#   KXMORTGAGERATE      Fed Cuts Aggressively · Housing / Mortgage Crisis
+```
+
+#### Build your own themes
+
+```bash
+kalshi themes create "My Macro Hedge" --label "Recession + inflation tail" --tickers KXRECSSNBER,KXCPIYOY
+kalshi themes add-series "My Macro Hedge" KXFEDDECISION,KXU3,KXMORTGAGERATE
+kalshi themes set-search-volume "My Macro Hedge" 50000
+kalshi themes export ~/my-themes.json    # version-control or share
+kalshi themes import ~/my-themes.json    # restore on another machine
+kalshi themes delete "My Macro Hedge"
+```
+
+#### Compose with baskets
+
+```bash
+# Backtest the entire theme as an equal-weight NAV (top market per series)
+kalshi basket backtest --theme "Iran Escalation" --timeframe 3m
+
+# OHLC bars for theme momentum
+kalshi basket candles --theme "Fed Cuts Aggressively" --timeframe 1y --json
+```
+
+### Series rollups
+
+`series` aggregates Octagon's market-level data to the series level — the canonical Kalshi grouping above individual markets.
+
+```bash
+kalshi series                              # all liquid series, sorted by 24h vol
+kalshi series list --min-volume 10000      # liquidity filter
+kalshi series KXBTCD                       # sub-markets in one series
+kalshi series search bitcoin               # keyword → rollup
+kalshi series candles KXBTCD --timeframe 3m   # series NAV = basket of top sub-markets
+```
+
+### Events — outcome ladders
+
+`events` exposes Octagon's event-level rollups, where each event is a multi-market Kalshi question (e.g. "Who will Trump nominate as Fed Chair?") with per-outcome model probabilities.
+
+```bash
+kalshi events --category Politics --limit 10
+kalshi events KXFEDCHAIRNOM-29     # outcome ladder with per-contract edge
+```
+
+### Catalyst calendar
+
+```bash
+kalshi catalysts upcoming                              # next 30 days
+kalshi catalysts upcoming --days 7 --min-volume 5000   # liquid markets, next week
+kalshi catalysts upcoming --category Politics
+```
+
+Groups markets by ISO week of `close_time` so you can see catalyst clustering and position before risk concentration.
 
 ---
 

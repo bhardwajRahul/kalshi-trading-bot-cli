@@ -354,6 +354,15 @@ export async function runCli(options?: { forceSetup?: boolean }) {
   const helpTopicCompletions = (typed: string): AutocompleteItem[] | null => {
     const topics = [
       { value: 'search', label: 'search', description: 'Discovery commands' },
+      { value: 'similar', label: 'similar', description: 'Semantic market search (Octagon)' },
+      { value: 'clusters', label: 'clusters', description: 'Browse thematic & behavioral clusters' },
+      { value: 'peers', label: 'peers', description: 'Cluster peers for a ticker' },
+      { value: 'correlate', label: 'correlate', description: 'Pairwise correlation matrix' },
+      { value: 'basket', label: 'basket', description: 'Build / backtest / size baskets' },
+      { value: 'events', label: 'events', description: 'Octagon events (event ↔ outcome ladder)' },
+      { value: 'series', label: 'series', description: 'Series rollup / NAV' },
+      { value: 'catalysts', label: 'catalysts', description: 'Upcoming market closes by week' },
+      { value: 'themes', label: 'themes', description: 'Editorial narrative registry + dashboard' },
       { value: 'portfolio', label: 'portfolio', description: 'Account state' },
       { value: 'analyze', label: 'analyze', description: 'Market analysis' },
       { value: 'watch', label: 'watch', description: 'Live monitoring' },
@@ -393,6 +402,85 @@ export async function runCli(options?: { forceSetup?: boolean }) {
       if (!typed) return opts;
       const lower = typed.toLowerCase();
       return opts.filter(o => o.value.toLowerCase().includes(lower));
+    }},
+    // Octagon Kalshi search/clusters/basket
+    { name: 'similar', description: 'Semantic market search by ticker or query', getArgumentCompletions: (typed: string): AutocompleteItem[] | null => {
+      const opts = [
+        { value: '<ticker>', label: '<ticker>', description: 'Anchor by ticker (no embedding call)' },
+        { value: '-q "query text"', label: '-q "query text"', description: 'Anchor by free-text (server-side embed)' },
+        { value: '--top-k 25', label: '--top-k 25', description: 'Number of neighbors (default 25)' },
+        { value: '--category crypto', label: '--category crypto', description: 'Filter by category' },
+        { value: '--min-volume 10000', label: '--min-volume 10000', description: '24h volume floor' },
+      ];
+      if (!typed) return opts;
+      return opts.filter(o => o.value.toLowerCase().includes(typed.toLowerCase()));
+    }},
+    { name: 'clusters', description: 'Browse thematic & behavioral clusters', getArgumentCompletions: (typed: string): AutocompleteItem[] | null => {
+      const opts = [
+        { value: '--label fed', label: '--label fed', description: 'Filter by label substring' },
+        { value: '--behavioral', label: '--behavioral', description: 'Behavioral clusters (30-day return vectors)' },
+        { value: '--ranked', label: '--ranked', description: 'Rank clusters by historical basket return' },
+        { value: '--ranked --timeframe 1y --min-return 0.20', label: '--ranked --timeframe 1y --min-return 0.20', description: 'Top-return baskets, 1y window' },
+        { value: '<cluster_id>', label: '<cluster_id>', description: 'List markets in a specific cluster' },
+      ];
+      if (!typed) return opts;
+      return opts.filter(o => o.value.toLowerCase().includes(typed.toLowerCase()));
+    }},
+    { name: 'peers', description: 'Find markets in the same cluster as a ticker', getArgumentCompletions: usageHint('<ticker> [--behavioral] [--limit N] [--show-cluster]', 'e.g. KXBTCD-26DEC31-T100000 --limit 20') },
+    { name: 'correlate', description: 'Pairwise correlation matrix (2-100 tickers)', getArgumentCompletions: usageHint('<ticker1> <ticker2> [...] [--window-days N]', 'e.g. KXA KXB KXC --window-days 90') },
+    { name: 'events', description: 'Octagon events — outcome ladder per event', getArgumentCompletions: usageHint('<event_ticker> | --category Politics | --min-volume 10000', 'e.g. KXFEDCHAIRNOM-29 to drill in') },
+    { name: 'series', description: 'Kalshi series rollup (24h vol, market count)', getArgumentCompletions: (typed: string): AutocompleteItem[] | null => {
+      const opts = [
+        { value: '<series_ticker>', label: '<series_ticker>', description: 'Drill into one series (e.g. KXBTCD)' },
+        { value: 'search <query>', label: 'search <query>', description: 'Keyword search rolled up by series' },
+        { value: 'candles <series_ticker> --timeframe 3m', label: 'candles <SERIES>', description: 'Series NAV basket' },
+        { value: '--min-volume 10000', label: '--min-volume 10000', description: 'Liquidity floor' },
+        { value: '--category Crypto', label: '--category Crypto', description: 'Filter by category' },
+      ];
+      if (!typed) return opts;
+      return opts.filter(o => o.value.toLowerCase().includes(typed.toLowerCase()));
+    }},
+    { name: 'catalysts', description: 'Upcoming market closes grouped by week', getArgumentCompletions: (typed: string): AutocompleteItem[] | null => {
+      const opts = [
+        { value: 'upcoming', label: 'upcoming', description: 'Next 30 days (default)' },
+        { value: 'upcoming --days 7', label: '--days 7', description: 'Next week' },
+        { value: 'upcoming --days 14 --min-volume 5000', label: '--days 14 --min-volume 5000', description: 'Two weeks, liquid only' },
+        { value: 'upcoming --category Politics', label: '--category Politics', description: 'By category' },
+      ];
+      if (!typed) return opts;
+      return opts.filter(o => o.value.toLowerCase().includes(typed.toLowerCase()));
+    }},
+    { name: 'themes', description: 'Editorial themes registry: import, report, audit, overlap', getArgumentCompletions: (typed: string): AutocompleteItem[] | null => {
+      const opts = [
+        { value: 'list', label: 'list', description: 'List registered themes' },
+        { value: 'import', label: 'import', description: 'Seed from data/themes_seo.json' },
+        { value: 'report', label: 'report', description: '25-theme dashboard with SEO + liquidity' },
+        { value: 'audit', label: 'audit', description: 'Flag STALE/NO_INVENTORY/THIN themes' },
+        { value: 'overlap', label: 'overlap', description: 'Cross-theme dedupe' },
+        { value: 'show <name>', label: 'show <name>', description: 'Drill into one theme' },
+        { value: 'create <name> --tickers KX-A,KX-B', label: 'create', description: 'Add a new theme' },
+        { value: 'add-series <name> KX-A,KX-B', label: 'add-series', description: 'Map series to a theme' },
+        { value: 'export themes.json', label: 'export', description: 'Save registry to JSON' },
+      ];
+      if (!typed) return opts;
+      return opts.filter(o => o.value.toLowerCase().includes(typed.toLowerCase()));
+    }},
+    { name: 'basket', description: 'Build, backtest, or size diversified baskets', getArgumentCompletions: (typed: string): AutocompleteItem[] | null => {
+      const opts = [
+        { value: 'build', label: 'build', description: 'Diversified basket builder (cluster + correlation caps)' },
+        { value: 'backtest', label: 'backtest', description: 'NAV + Sharpe/MaxDD/WinRate over basket history' },
+        { value: 'size', label: 'size', description: 'Fractional Kelly sizing for picked legs' },
+        { value: 'candles', label: 'candles', description: 'OHLC bars for a weighted basket NAV' },
+        { value: 'validate', label: 'validate', description: 'Sanity-check a proposed basket (corr, clusters, calendar)' },
+        { value: 'build --category crypto --min-volume 10000 -n 8 --max-per-cluster 2 --max-corr 0.6', label: 'build crypto basket', description: 'Build 8-leg crypto basket' },
+        { value: 'backtest --tickers KX-A,KX-B --timeframe 1y', label: 'backtest 1y', description: 'Backtest a basket over 1y' },
+        { value: 'backtest --theme "Iran Escalation" --timeframe 3m', label: 'backtest --theme', description: 'Backtest an editorial theme NAV' },
+        { value: 'candles --theme "Fed Cuts Aggressively" --timeframe 1y', label: 'candles --theme', description: 'NAV candles for a theme' },
+        { value: 'validate --theme "Iran Escalation" --bankroll 1000', label: 'validate --theme', description: 'Sanity-check theme basket' },
+        { value: 'size --auto-probs --theme "AI Race Milestones" --bankroll 1000 --kelly 0.25', label: 'size --auto-probs', description: 'Auto-fetch model edges + Kelly-size' },
+      ];
+      if (!typed) return opts;
+      return opts.filter(o => o.value.toLowerCase().includes(typed.toLowerCase()));
     }},
     // Utility
     { name: 'help', description: 'Show help (/help <command> for details)', getArgumentCompletions: helpTopicCompletions },

@@ -26,6 +26,17 @@ import { scanEdges, formatEdgeScanHuman } from './search-edge.js';
 import type { KalshiBalanceResponse } from './formatters.js';
 import { ExitCode, exitCodeFromError } from '../utils/errors.js';
 import { trackEvent } from '../utils/telemetry.js';
+import { handleSimilar, formatSimilarHuman } from './similar.js';
+import { handleClusters, formatClustersHuman } from './clusters.js';
+import { handlePeers, formatPeersHuman } from './peers.js';
+import { handleCorrelate, formatCorrelationHuman } from './correlate.js';
+import { handleBasket, formatBasketHuman } from './basket.js';
+import { searchKalshiMarkets, getMarketsWithEdge } from '../scan/octagon-kalshi-api.js';
+import { formatMarketSearchHuman, formatMarketsWithEdgeHuman } from './search-remote.js';
+import { handleEvents, formatEventsHuman } from './events.js';
+import { handleSeries, formatSeriesHuman } from './series.js';
+import { handleEditorialThemes, formatEditorialThemesHuman } from './editorial-themes.js';
+import { handleCatalysts, formatCatalystsHuman } from './catalysts.js';
 
 // ─── Alias resolution ────────────────────────────────────────────────────────
 // Maps legacy CLI subcommands to canonical commands with mode/subview context
@@ -45,19 +56,49 @@ function resolveAlias(subcommand: Subcommand, positionalArgs: string[]): Resolve
     case 'status':
       return { canonical: 'portfolio', subview: 'status' };
 
-    // themes → search themes
-    case 'themes':
-      return { canonical: 'search', subview: 'themes' };
+    // `themes` is now the editorial-themes registry (curated narrative buckets).
+    // Legacy "kalshi search themes" (Kalshi category labels) is still reachable
+    // via `search themes`.
+
+    // basket sub-routing (build/backtest/size/candles) — exposed for telemetry granularity
+    case 'basket': {
+      const sub = positionalArgs[0]?.toLowerCase();
+      if (sub === 'build' || sub === 'backtest' || sub === 'size' || sub === 'candles') {
+        return { canonical: 'basket', subview: sub };
+      }
+      return { canonical: 'basket' };
+    }
 
     default:
       return { canonical: subcommand };
   }
 }
 
+function modeFlagsFor(canonical: Subcommand, args: ParsedArgs): Record<string, string | boolean> {
+  switch (canonical) {
+    case 'clusters':
+      return { behavioral: args.behavioral, ranked: args.ranked };
+    case 'peers':
+      return { behavioral: args.behavioral, show_cluster: args.showCluster };
+    case 'similar':
+      return { anchor: args.ticker ? 'ticker' : args.query ? 'query' : 'positional' };
+    case 'basket':
+      return { kelly_sizing: args.bankroll !== undefined };
+    case 'search':
+      return { remote: !!process.env.OCTAGON_API_KEY };
+    default:
+      return {};
+  }
+}
+
 export async function dispatch(args: ParsedArgs): Promise<void> {
   const { subcommand, json } = args;
   const resolved = resolveAlias(subcommand, args.positionalArgs);
-  trackEvent('cli_command', { command: resolved.canonical, subview: resolved.subview ?? '' });
+  trackEvent('cli_command', {
+    command: resolved.canonical,
+    subview: resolved.subview ?? '',
+    ...modeFlagsFor(resolved.canonical, args),
+  });
 
   try {
     // ─── reject invalid flags early (for all commands) ───────────────
@@ -87,8 +128,26 @@ export async function dispatch(args: ParsedArgs): Promise<void> {
         return;
       }
       if (sub === 'edge') {
-        const db = (await import('../db/index.js')).getDb();
         const minEdgePp = (args.minEdge ?? 0.05) * 100;
+        if (process.env.OCTAGON_API_KEY) {
+          // edge_pp_min is asymmetric (only filters lower bound). Skip when
+          // user passes --min-edge 0 so they see the full distribution.
+          const data = await getMarketsWithEdge({
+            category: args.category,
+            ...(minEdgePp > 0 ? { edge_pp_min: minEdgePp } : {}),
+            sort_by: (args.sortBy as 'edge_pp' | 'expected_return' | 'total_volume' | 'model_probability' | undefined) ?? 'edge_pp',
+            limit: args.limit ?? 20,
+          });
+          if (json) {
+            console.log(JSON.stringify(wrapSuccess('search', data)));
+          } else {
+            console.log(formatMarketsWithEdgeHuman(data, minEdgePp));
+          }
+          process.exit(ExitCode.SUCCESS);
+          return;
+        }
+        // Local fallback: scan cached Octagon reports in SQLite
+        const db = (await import('../db/index.js')).getDb();
         const result = scanEdges(db, { minEdgePp, limit: args.limit, category: args.category });
         if (json) {
           console.log(JSON.stringify(wrapSuccess('search', result)));
@@ -109,14 +168,60 @@ export async function dispatch(args: ParsedArgs): Promise<void> {
         process.exit(resp.ok ? ExitCode.SUCCESS : ExitCode.USER_ERROR);
         return;
       }
-      // General search: query the local event index
+      const query = args.positionalArgs.join(' ');
+
+      // Octagon-powered server-side search: broader universe, full-text + structured filters.
+      if (process.env.OCTAGON_API_KEY) {
+        // --aggregate-by series → route to series rollup
+        if (args.aggregateBy === 'series') {
+          const { handleSeries, formatSeriesHuman } = await import('./series.js');
+          const seriesArgs = { ...args, positionalArgs: query ? ['search', query] : ['list'] };
+          const resp = await handleSeries(seriesArgs);
+          if (json) {
+            console.log(JSON.stringify(resp));
+          } else if (resp.ok) {
+            console.log(formatSeriesHuman(resp.data));
+          } else {
+            console.error(resp.error?.message ?? 'series rollup failed');
+          }
+          process.exit(resp.ok ? ExitCode.SUCCESS : ExitCode.USER_ERROR);
+          return;
+        }
+        // sort_by is now server-side (true top-N across the whole universe);
+        // series_prefix lets us tree-browse (KXBTC matches all Bitcoin series).
+        const serverSortBy = (args.sortBy === 'volume_24h' || args.sortBy === 'close_time' || args.sortBy === 'last_price')
+          ? args.sortBy
+          : undefined;
+        const page = await searchKalshiMarkets({
+          q: query,
+          category: args.category,
+          series_ticker: args.seriesTicker,
+          series_prefix: args.seriesPrefix,
+          min_volume_24h: args.minVolume,
+          close_before: args.closeBefore,
+          sort_by: serverSortBy,
+          limit: args.limit ?? 30,
+        });
+        // --active-only is defensive — the live universe is active by default.
+        const rows = args.activeOnly
+          ? page.data.filter((m) => m.status === 'active' || m.status === 'open')
+          : page.data;
+        const filteredPage = { ...page, data: rows };
+        if (json) {
+          console.log(JSON.stringify(wrapSuccess('search', filteredPage)));
+        } else {
+          console.log(formatMarketSearchHuman(query, filteredPage));
+        }
+        return;
+      }
+
+      // Local fallback: query the pre-built event index.
       if (args.refresh) {
         await forceRefreshIndex();
       } else {
         await ensureIndex();
       }
       const db = (await import('../db/index.js')).getDb();
-      const query = args.positionalArgs.join(' ');
       const results = searchEventIndex(db, query, 30);
       if (json) {
         console.log(JSON.stringify(wrapSuccess('search', { events: results })));
@@ -225,6 +330,132 @@ export async function dispatch(args: ParsedArgs): Promise<void> {
         }
         await promptAnalyzeActions(data);
       }
+      return;
+    }
+
+    // ─── similar (Octagon semantic search) ─────────────────────────────
+    if (resolved.canonical === 'similar') {
+      const resp = await handleSimilar(args);
+      if (json) {
+        console.log(JSON.stringify(resp));
+      } else if (resp.ok) {
+        console.log(formatSimilarHuman(resp.data));
+      } else {
+        console.error(resp.error?.message ?? 'similar failed');
+      }
+      process.exit(resp.ok ? ExitCode.SUCCESS : ExitCode.USER_ERROR);
+      return;
+    }
+
+    // ─── clusters (Octagon thematic & behavioral) ──────────────────────
+    if (resolved.canonical === 'clusters') {
+      const resp = await handleClusters(args);
+      if (json) {
+        console.log(JSON.stringify(resp));
+      } else if (resp.ok) {
+        console.log(formatClustersHuman(resp.data));
+      } else {
+        console.error(resp.error?.message ?? 'clusters failed');
+      }
+      process.exit(resp.ok ? ExitCode.SUCCESS : ExitCode.USER_ERROR);
+      return;
+    }
+
+    // ─── peers (Octagon cluster peers) ─────────────────────────────────
+    if (resolved.canonical === 'peers') {
+      const resp = await handlePeers(args);
+      if (json) {
+        console.log(JSON.stringify(resp));
+      } else if (resp.ok) {
+        console.log(formatPeersHuman(resp.data));
+      } else {
+        console.error(resp.error?.message ?? 'peers failed');
+      }
+      process.exit(resp.ok ? ExitCode.SUCCESS : ExitCode.USER_ERROR);
+      return;
+    }
+
+    // ─── correlate (Octagon correlation matrix) ────────────────────────
+    if (resolved.canonical === 'correlate') {
+      const resp = await handleCorrelate(args);
+      if (json) {
+        console.log(JSON.stringify(resp));
+      } else if (resp.ok) {
+        console.log(formatCorrelationHuman(resp.data));
+      } else {
+        console.error(resp.error?.message ?? 'correlate failed');
+      }
+      process.exit(resp.ok ? ExitCode.SUCCESS : ExitCode.USER_ERROR);
+      return;
+    }
+
+    // ─── catalysts (upcoming market closes grouped by week) ────────────
+    if (resolved.canonical === 'catalysts') {
+      const resp = await handleCatalysts(args);
+      if (json) {
+        console.log(JSON.stringify(resp));
+      } else if (resp.ok) {
+        console.log(formatCatalystsHuman(resp.data));
+      } else {
+        console.error(resp.error?.message ?? 'catalysts failed');
+      }
+      process.exit(resp.ok ? ExitCode.SUCCESS : ExitCode.USER_ERROR);
+      return;
+    }
+
+    // ─── themes (editorial narrative registry) ─────────────────────────
+    if (resolved.canonical === 'themes') {
+      const resp = await handleEditorialThemes(args);
+      if (json) {
+        console.log(JSON.stringify(resp));
+      } else if (resp.ok) {
+        console.log(formatEditorialThemesHuman(resp.data));
+      } else {
+        console.error(resp.error?.message ?? 'themes failed');
+      }
+      process.exit(resp.ok ? ExitCode.SUCCESS : ExitCode.USER_ERROR);
+      return;
+    }
+
+    // ─── series (Kalshi series rollup) ─────────────────────────────────
+    if (resolved.canonical === 'series') {
+      const resp = await handleSeries(args);
+      if (json) {
+        console.log(JSON.stringify(resp));
+      } else if (resp.ok) {
+        console.log(formatSeriesHuman(resp.data));
+      } else {
+        console.error(resp.error?.message ?? 'series failed');
+      }
+      process.exit(resp.ok ? ExitCode.SUCCESS : ExitCode.USER_ERROR);
+      return;
+    }
+
+    // ─── events (Octagon events list / detail) ─────────────────────────
+    if (resolved.canonical === 'events') {
+      const resp = await handleEvents(args);
+      if (json) {
+        console.log(JSON.stringify(resp));
+      } else if (resp.ok) {
+        console.log(formatEventsHuman(resp.data));
+      } else {
+        console.error(resp.error?.message ?? 'events failed');
+      }
+      process.exit(resp.ok ? ExitCode.SUCCESS : ExitCode.USER_ERROR);
+      return;
+    }
+
+    // ─── basket (build, backtest, size, candles) ───────────────────────
+    if (resolved.canonical === 'basket') {
+      const resp = await handleBasket(args);
+      if (json) {
+        console.log(JSON.stringify(resp));
+      } else if (resp.ok) {
+        console.log(formatBasketHuman(resp.data));
+      } else {
+        console.error(resp.error?.message ?? 'basket failed');
+      }
+      process.exit(resp.ok ? ExitCode.SUCCESS : ExitCode.USER_ERROR);
       return;
     }
 
