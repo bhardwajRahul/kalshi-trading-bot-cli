@@ -56,15 +56,45 @@ function resolveAlias(subcommand: Subcommand, positionalArgs: string[]): Resolve
     case 'themes':
       return { canonical: 'search', subview: 'themes' };
 
+    // basket sub-routing (build/backtest/size/candles) — exposed for telemetry granularity
+    case 'basket': {
+      const sub = positionalArgs[0]?.toLowerCase();
+      if (sub === 'build' || sub === 'backtest' || sub === 'size' || sub === 'candles') {
+        return { canonical: 'basket', subview: sub };
+      }
+      return { canonical: 'basket' };
+    }
+
     default:
       return { canonical: subcommand };
+  }
+}
+
+function modeFlagsFor(canonical: Subcommand, args: ParsedArgs): Record<string, string | boolean> {
+  switch (canonical) {
+    case 'clusters':
+      return { behavioral: args.behavioral, ranked: args.ranked };
+    case 'peers':
+      return { behavioral: args.behavioral, show_cluster: args.showCluster };
+    case 'similar':
+      return { anchor: args.ticker ? 'ticker' : args.query ? 'query' : 'positional' };
+    case 'basket':
+      return { kelly_sizing: args.bankroll !== undefined };
+    case 'search':
+      return { remote: !!process.env.OCTAGON_API_KEY };
+    default:
+      return {};
   }
 }
 
 export async function dispatch(args: ParsedArgs): Promise<void> {
   const { subcommand, json } = args;
   const resolved = resolveAlias(subcommand, args.positionalArgs);
-  trackEvent('cli_command', { command: resolved.canonical, subview: resolved.subview ?? '' });
+  trackEvent('cli_command', {
+    command: resolved.canonical,
+    subview: resolved.subview ?? '',
+    ...modeFlagsFor(resolved.canonical, args),
+  });
 
   try {
     // ─── reject invalid flags early (for all commands) ───────────────

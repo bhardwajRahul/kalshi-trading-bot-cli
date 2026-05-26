@@ -57,7 +57,28 @@ export async function handleSlashCommand(input: string): Promise<CommandResult |
   const parts = trimmed.slice(1).trim().split(/\s+/);
   const command = parts[0]?.toLowerCase();
   const args = parts.slice(1);
-  trackEvent('slash_command', { command: command ?? '' });
+  // Enrich Octagon-Kalshi commands with subview/mode flags so analytics can
+  // distinguish e.g. "basket build" vs "basket backtest", or thematic vs
+  // behavioral clusters. Outer command name is always tracked.
+  const slashMeta: Record<string, string | boolean> = { command: command ?? '' };
+  if (command === 'basket') {
+    const sub = args[0]?.toLowerCase();
+    if (sub === 'build' || sub === 'backtest' || sub === 'size' || sub === 'candles') {
+      slashMeta.subview = sub;
+    }
+    slashMeta.kelly_sizing = args.includes('--bankroll');
+  } else if (command === 'clusters') {
+    slashMeta.behavioral = args.includes('--behavioral');
+    slashMeta.ranked = args.includes('--ranked');
+  } else if (command === 'peers') {
+    slashMeta.behavioral = args.includes('--behavioral');
+    slashMeta.show_cluster = args.includes('--show-cluster');
+  } else if (command === 'similar') {
+    slashMeta.anchor = args.includes('-q') || args.includes('--query') ? 'query' : 'ticker';
+  } else if (command === 'search') {
+    slashMeta.remote = !!process.env.OCTAGON_API_KEY;
+  }
+  trackEvent('slash_command', slashMeta);
 
   switch (command) {
     case 'help': {
