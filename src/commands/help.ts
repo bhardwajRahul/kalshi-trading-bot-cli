@@ -192,13 +192,16 @@ Flags:
 ${p}correlate <ticker1> <ticker2> [...]   Pearson correlation across 2-100 tickers
 ${p}correlate --tickers KX-A,KX-B,KX-C    Same, comma-separated
 ${p}correlate KX-A KX-B --window-days 90  90-day lookback
-${p}correlate KX-A KX-B --correlation-interval 1d   Force daily candles
+${p}correlate KX-A KX-B --sides yes,no    Side-aware: corr(YES_A, NO_B) flips sign
+${p}correlate KX-A KX-B --cells           Per-cell detail (overlap_count + reason)
 
 Flags:
   --window-days <n>             Lookback (1-730, default 30; auto interval picks 1d if >=90)
   --correlation-interval <1h|1d>  Override bin size
   --tickers <csv>               Alternative to positional args
-  --json                        JSON output (matrix + ranked_pairs)
+  --sides yes,no,yes            Per-ticker side (same length as tickers); default all yes
+  --cells                       Include per-cell detail (overlap_count, reason)
+  --json                        JSON output (matrix + ranked_pairs + cells_detail)
 
 Output ranks pairs ascending by correlation — most-uncorrelated first.`,
 
@@ -228,6 +231,7 @@ ${p}series list --category Crypto   Filter by category
 ${p}series KXBTCD                   Drill in: all sub-markets sorted by volume
 ${p}series search "bitcoin"         Keyword search → rolled up by series
 ${p}series candles KXBTCD --timeframe 3m   Series NAV = equal-weight basket of top sub-markets
+${p}series events KXIPO              List events in a series (e.g. KXIPO → KXIPO-26)
 
 Flags:
   --min-volume <n>       Floor on 24h volume per series
@@ -235,10 +239,12 @@ Flags:
   --limit <n>            Page size (default 50)
   --timeframe <1w|1m|3m|6m|1y>  Candle window (default 1y; for "series candles")
   --top-k <n>            Sub-markets to include in series NAV basket (default 20)
+  --series <prefix>      Filter list by series-ticker prefix (e.g. KXBTC)
   --json                 JSON output
 
 A series is the Kalshi grouping above individual markets — KXBTCD is the BTC
-strike ladder, with hundreds of sub-markets like KXBTCD-26DEC31-T100000.`,
+strike ladder, with hundreds of sub-markets like KXBTCD-26DEC31-T100000.
+Series list is now a single server-side call (was 25 paginated calls).`,
 
     catalysts: `**${p}catalysts** — Upcoming Kalshi market closes grouped by week
 
@@ -292,6 +298,14 @@ ${p}basket backtest --tickers KX-A,KX-B --weights 0.6,0.4 --timeframe 1y
 ${p}basket candles  --tickers KX-A,KX-B --timeframe 6m
 ${p}basket size     --bankroll 1000 --kelly 0.25 --probs KX-A:0.62,KX-B:0.55 [--side yes|no]
 
+Validate flags:
+  --tickers KX-A,KX-B           Validate explicit tickers (equal-stake split)
+  --probs KX-A:yes:170,KX-B:no:160  Per-leg ticker:side:stake
+  --theme <name>                Resolve from editorial registry
+  --bankroll <usd>              Used to compute max_leg_pct + warnings
+  --window-days <n>             Correlation lookback (default 30)
+  --max-corr <-1..1>            Soft threshold for correlation warning
+
 Build flags (universe + diversification):
   --category <name>             Restrict candidate pool by category
   --series <ticker>             Restrict to a series
@@ -309,7 +323,9 @@ Build flags (universe + diversification):
 Sizing flags (build & size):
   --bankroll <usd>              Required for Kelly sizing
   --kelly <fraction>            Kelly multiplier 0-1 (default 0.25)
-  --probs KX-A:0.62,KX-B:0.55   Model probabilities per ticker
+  --probs KX-A:0.62,KX-B:0.55   Model probabilities per ticker (manual)
+  --auto-probs --tickers KX-A,KX-B   Auto-fetch via POST /markets/edge
+  --auto-probs --theme <name>   Resolve theme + auto-fetch probabilities
   --side <yes|no>               Default leg side for "basket size" (default yes)
 
 Backtest/candles flags:
@@ -324,7 +340,10 @@ Common:
 Recipes:
   ${p}basket build --category crypto --min-volume 10000 -n 8 --max-per-cluster 2 --max-corr 0.6
   ${p}basket build --label fed,cpi,fomc,gdp,jobs -n 5 --max-per-cluster 1 --max-corr 0.4
-  ${p}basket backtest --tickers KX-A,KX-B,KX-C --weights 0.4,0.4,0.2 --timeframe 1y`,
+  ${p}basket backtest --tickers KX-A,KX-B,KX-C --weights 0.4,0.4,0.2 --timeframe 1y
+  ${p}basket size --auto-probs --theme "Iran Escalation" --bankroll 1000 --kelly 0.25
+  ${p}basket validate --theme "Iran Escalation" --bankroll 1000      # sanity-check before placing
+  ${p}basket validate --tickers KX-A,KX-B --bankroll 1000 --max-corr 0.5`,
   };
 }
 

@@ -471,10 +471,13 @@ export async function runCli(options?: { forceSetup?: boolean }) {
         { value: 'backtest', label: 'backtest', description: 'NAV + Sharpe/MaxDD/WinRate over basket history' },
         { value: 'size', label: 'size', description: 'Fractional Kelly sizing for picked legs' },
         { value: 'candles', label: 'candles', description: 'OHLC bars for a weighted basket NAV' },
+        { value: 'validate', label: 'validate', description: 'Sanity-check a proposed basket (corr, clusters, calendar)' },
         { value: 'build --category crypto --min-volume 10000 -n 8 --max-per-cluster 2 --max-corr 0.6', label: 'build crypto basket', description: 'Build 8-leg crypto basket' },
         { value: 'backtest --tickers KX-A,KX-B --timeframe 1y', label: 'backtest 1y', description: 'Backtest a basket over 1y' },
         { value: 'backtest --theme "Iran Escalation" --timeframe 3m', label: 'backtest --theme', description: 'Backtest an editorial theme NAV' },
         { value: 'candles --theme "Fed Cuts Aggressively" --timeframe 1y', label: 'candles --theme', description: 'NAV candles for a theme' },
+        { value: 'validate --theme "Iran Escalation" --bankroll 1000', label: 'validate --theme', description: 'Sanity-check theme basket' },
+        { value: 'size --auto-probs --theme "AI Race Milestones" --bankroll 1000 --kelly 0.25', label: 'size --auto-probs', description: 'Auto-fetch model edges + Kelly-size' },
       ];
       if (!typed) return opts;
       return opts.filter(o => o.value.toLowerCase().includes(typed.toLowerCase()));

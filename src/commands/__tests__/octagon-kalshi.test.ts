@@ -23,6 +23,8 @@ function makeArgs(overrides: Partial<ParsedArgs>): ParsedArgs {
     ranked: false,
     showCluster: false,
     activeOnly: false,
+    cells: false,
+    autoProbs: false,
     parseErrors: [],
     ...overrides,
   };
@@ -238,6 +240,169 @@ describe('Octagon Kalshi commands', () => {
     expect(resp.ok).toBe(false);
     if (resp.ok) return;
     expect(resp.error?.code).toBe('MISSING_SUBCOMMAND');
+  });
+
+  test('basket validate via --tickers (equal split)', async () => {
+    let postedBody: any;
+    installFetchMock(async (url, init) => {
+      expect(url).toContain('/baskets/validate');
+      postedBody = JSON.parse((init?.body as string) ?? '{}');
+      return jsonResponse({
+        total_stake_usd: 1000,
+        bankroll_usd: 1000,
+        max_leg_pct: 0.5,
+        cluster_breakdown_thematic: { '16': ['KX-A', 'KX-B'] },
+        cluster_breakdown_behavioral: {},
+        unassigned_market_tickers: [],
+        max_pairwise_correlation: null,
+        pairwise_correlations: [],
+        calendar_clashes: [],
+        duplicate_underliers: [],
+        warnings: ['Single leg is 50% of bankroll'],
+      });
+    });
+    const { handleBasket } = await import('../basket.js');
+    const resp = await handleBasket(makeArgs({
+      subcommand: 'basket', positionalArgs: ['validate'],
+      tickers: 'KX-A,KX-B', bankroll: 1000,
+    }));
+    expect(resp.ok).toBe(true);
+    if (!resp.ok) return;
+    expect(resp.data.sub).toBe('validate');
+    expect(postedBody.legs).toHaveLength(2);
+    expect(postedBody.legs[0]).toEqual({ market_ticker: 'KX-A', side: 'yes', stake_usd: 500 });
+  });
+
+  test('basket size --auto-probs fetches probabilities then sizes', async () => {
+    let edgeCalled = false;
+    let sizeCalled = false;
+    let sizeBody: any;
+    installFetchMock(async (url, init) => {
+      if (url.includes('/markets/edge')) {
+        edgeCalled = true;
+        const body = JSON.parse((init?.body as string) ?? '{}');
+        expect(body.tickers).toEqual(['KX-A', 'KX-B']);
+        return jsonResponse({
+          run_id: 'r', captured_at: 'now', data: [
+            { input_ticker: 'KX-A', market_ticker: 'KX-A', event_ticker: 'KX-A', title: null, series_category: null, model_probability: 0.62, market_probability: 0.55, edge_pp: 7, expected_return: 0.13, confidence_score: 7, total_volume: 100, total_open_interest: 50, status: 'scored', captured_at: 'now' },
+            { input_ticker: 'KX-B', market_ticker: 'KX-B', event_ticker: 'KX-B', title: null, series_category: null, model_probability: null, market_probability: null, edge_pp: null, expected_return: null, confidence_score: null, total_volume: null, total_open_interest: null, status: 'unscored', captured_at: null },
+          ],
+        });
+      }
+      if (url.includes('/baskets/size')) {
+        sizeCalled = true;
+        sizeBody = JSON.parse((init?.body as string) ?? '{}');
+        return jsonResponse({ bankroll_usd: 1000, kelly_multiplier: 0.25, total_notional: 100, legs: [] });
+      }
+      return jsonResponse({});
+    });
+    const { handleBasket } = await import('../basket.js');
+    const resp = await handleBasket(makeArgs({
+      subcommand: 'basket', positionalArgs: ['size'],
+      autoProbs: true, tickers: 'KX-A,KX-B', bankroll: 1000, kellyMultiplier: 0.25,
+    }));
+    expect(resp.ok).toBe(true);
+    expect(edgeCalled).toBe(true);
+    expect(sizeCalled).toBe(true);
+    // Only KX-A (scored) made it to the size payload
+    expect(sizeBody.legs).toHaveLength(1);
+    expect(sizeBody.legs[0]).toEqual({ market_ticker: 'KX-A', side: 'yes', model_probability: 0.62 });
+  });
+
+  test('basket size --auto-probs errors when nothing is scored', async () => {
+    installFetchMock(async (url) => {
+      if (url.includes('/markets/edge')) {
+        return jsonResponse({
+          run_id: 'r', captured_at: 'now', data: [
+            { input_ticker: 'KX-A', market_ticker: 'KX-A', event_ticker: 'KX-A', title: null, series_category: null, model_probability: null, market_probability: null, edge_pp: null, expected_return: null, confidence_score: null, total_volume: null, total_open_interest: null, status: 'unscored', captured_at: null },
+          ],
+        });
+      }
+      return jsonResponse({});
+    });
+    const { handleBasket } = await import('../basket.js');
+    const resp = await handleBasket(makeArgs({
+      subcommand: 'basket', positionalArgs: ['size'],
+      autoProbs: true, tickers: 'KX-A', bankroll: 1000,
+    }));
+    expect(resp.ok).toBe(false);
+    if (resp.ok) return;
+    expect(resp.error?.code).toBe('NO_SCORED_LEGS');
+  });
+
+  test('correlate sends sides + include_cell_detail when flags set', async () => {
+    let postedBody: any;
+    installFetchMock(async (url, init) => {
+      postedBody = JSON.parse((init?.body as string) ?? '{}');
+      return jsonResponse({
+        tickers: ['KX-A', 'KX-B'],
+        sides: ['yes', 'no'],
+        matrix: [[1, 0.5], [0.5, 1]],
+        ranked_pairs: [{ ticker_a: 'KX-A', ticker_b: 'KX-B', correlation: 0.5 }],
+        window_days: 30, interval: '1h', missing: [],
+        cells_detail: [{ ticker_a: 'KX-A', ticker_b: 'KX-B', correlation: 0.5, overlap_count: 720, reason: 'ok' }],
+      });
+    });
+    const { handleCorrelate } = await import('../correlate.js');
+    const resp = await handleCorrelate(makeArgs({
+      subcommand: 'correlate', positionalArgs: ['KX-A', 'KX-B'],
+      sides: 'yes,no', cells: true, windowDays: 30,
+    }));
+    expect(resp.ok).toBe(true);
+    expect(postedBody.sides).toEqual(['yes', 'no']);
+    expect(postedBody.include_cell_detail).toBe(true);
+  });
+
+  test('correlate rejects mismatched sides length', async () => {
+    installFetchMock(() => jsonResponse({}));
+    const { handleCorrelate } = await import('../correlate.js');
+    const resp = await handleCorrelate(makeArgs({
+      subcommand: 'correlate', positionalArgs: ['KX-A', 'KX-B'],
+      sides: 'yes,no,yes',
+    }));
+    expect(resp.ok).toBe(false);
+    if (resp.ok) return;
+    expect(resp.error?.code).toBe('SIDES_MISMATCH');
+  });
+
+  test('series list calls /kalshi/series rollup endpoint', async () => {
+    let calledUrl = '';
+    installFetchMock(async (url) => {
+      calledUrl = url;
+      return jsonResponse({
+        data: [
+          { series_ticker: 'KXBTCD', series_title: 'BTC', market_count: 200, active_count: 150, total_volume_24h: 1000, dominant_category: 'Crypto', categories: ['Crypto'], last_seen_at: '2026-05-25' },
+        ],
+        next_cursor: null,
+        has_more: false,
+      });
+    });
+    const { handleSeries } = await import('../series.js');
+    const resp = await handleSeries(makeArgs({ subcommand: 'series', positionalArgs: [] }));
+    expect(resp.ok).toBe(true);
+    if (!resp.ok) return;
+    if (resp.data.kind !== 'server-list') throw new Error('Expected server-list kind');
+    expect(resp.data.data).toHaveLength(1);
+    expect(calledUrl).toContain('/kalshi/series?');
+    expect(calledUrl).toContain('sort_by=total_volume_24h');
+  });
+
+  test('series KXBTCD uses series_prefix server-side', async () => {
+    let calledUrl = '';
+    installFetchMock(async (url) => {
+      calledUrl = url;
+      return jsonResponse({
+        data: [
+          { market_ticker: 'KXBTCD-26DEC31-T100000', event_ticker: 'KXBTCD-26DEC31', series_ticker: null, title: 'BTC', status: 'active', close_time: null, last_price: 0.5, volume_24h: 100, category: 'Crypto' },
+        ],
+        next_cursor: null, has_more: false,
+      });
+    });
+    const { handleSeries } = await import('../series.js');
+    const resp = await handleSeries(makeArgs({ subcommand: 'series', positionalArgs: ['KXBTCD'] }));
+    expect(resp.ok).toBe(true);
+    expect(calledUrl).toContain('series_prefix=KXBTCD');
+    expect(calledUrl).toContain('sort_by=volume_24h');
   });
 
   test('Octagon API: 502 surfaces as wrapped error', async () => {

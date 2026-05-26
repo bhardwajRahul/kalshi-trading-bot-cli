@@ -7,6 +7,8 @@ import {
   getBasketSize,
   getBasketCandles,
   searchKalshiMarkets,
+  validateBasket,
+  getMarketsEdge,
   type BasketBuildResponse,
   type BasketBacktestResponse,
   type BasketSizeResponse,
@@ -14,6 +16,9 @@ import {
   type BasketBuildBody,
   type BasketSizeBody,
   type BasketCandlesBody,
+  type BasketValidateResponse,
+  type ValidateBasketBody,
+  type ValidateBasketLeg,
 } from '../scan/octagon-kalshi-api.js';
 import { formatTable } from './scan-formatters.js';
 import { getDb } from '../db/index.js';
@@ -316,13 +321,56 @@ export function formatBasketCandlesHuman(data: BasketCandlesResponse): string {
 
 export async function handleBasketSize(args: ParsedArgs): Promise<CLIResponse<BasketSizeResponse>> {
   if (args.bankroll === undefined || args.bankroll <= 0) {
-    return wrapError('basket', 'MISSING_BANKROLL', 'Usage: basket size --bankroll 1000 --kelly 0.25 --probs KX-A:0.62,KX-B:0.55 [--side yes|no]');
+    return wrapError('basket', 'MISSING_BANKROLL', 'Usage: basket size --bankroll 1000 --kelly 0.25 --probs KX-A:0.62,KX-B:0.55 [--side yes|no]  OR  --auto-probs --theme "AI Race Milestones"  OR  --auto-probs --tickers KX-A,KX-B');
   }
   const sideDefault = args.side ?? 'yes';
-  const legs = parseLegs(args.probabilities, sideDefault);
-  if (legs.length === 0) {
-    return wrapError('basket', 'MISSING_PROBS', 'Pass --probs TICKER:prob,TICKER:prob,... with at least one leg.');
+
+  // Source the leg list. Priority:
+  //   1) --probs (explicit): manual probabilities
+  //   2) --theme: resolve to top market per series, then fetch probs via markets/edge
+  //   3) --tickers + --auto-probs: explicit tickers, fetched probs
+  let legs: { market_ticker: string; side: 'yes' | 'no'; model_probability: number }[] = [];
+
+  if (args.probabilities && /[:]/.test(args.probabilities) && !args.autoProbs) {
+    legs = parseLegs(args.probabilities, sideDefault);
+  } else if (args.theme || (args.autoProbs && args.tickers)) {
+    let tickers: string[];
+    if (args.theme) {
+      try {
+        tickers = await tickersFromTheme(args.theme, args.topK ?? 1, 30);
+      } catch (err) {
+        return wrapError('basket', 'THEME_RESOLVE', err instanceof Error ? err.message : String(err));
+      }
+    } else {
+      tickers = (args.tickers ?? '').split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
+    }
+    if (tickers.length === 0) {
+      return wrapError('basket', 'NO_TICKERS', 'No tickers to size.');
+    }
+    let edgeRows;
+    try {
+      const edgeResp = await getMarketsEdge({ tickers });
+      edgeRows = edgeResp.data;
+    } catch (err) {
+      return wrapError('basket', 'OCTAGON_EDGE', err instanceof Error ? err.message : String(err));
+    }
+    const scored = edgeRows.filter((r) => r.status === 'scored' && r.model_probability != null);
+    if (scored.length === 0) {
+      const unscored = edgeRows.map((r) => r.input_ticker).join(', ');
+      return wrapError('basket', 'NO_SCORED_LEGS',
+        `Octagon has no model coverage for any of these tickers in the current run. Unscored: ${unscored}. Try --probs to supply your own priors, or pick events Octagon scored (see kalshi search edge).`);
+    }
+    legs = scored.map((r) => ({
+      market_ticker: r.market_ticker ?? r.input_ticker,
+      side: sideDefault,
+      model_probability: r.model_probability!,
+    }));
   }
+
+  if (legs.length === 0) {
+    return wrapError('basket', 'MISSING_PROBS', 'Pass --probs TICKER:prob,TICKER:prob OR --auto-probs --theme "..." OR --auto-probs --tickers KX-A,KX-B.');
+  }
+
   const body: BasketSizeBody = {
     bankroll_usd: args.bankroll,
     kelly_multiplier: args.kellyMultiplier ?? 0.25,
@@ -355,13 +403,166 @@ export function formatBasketSizeHuman(data: BasketSizeResponse): string {
   return lines.join('\n');
 }
 
+// ─── validate ───────────────────────────────────────────────────────────────
+
+/**
+ * Parse --legs "KX-A:yes:170,KX-B:no:160" into ValidateBasketLeg[].
+ * Each leg is ticker[:side[:stake]] — side defaults to yes, stake defaults to
+ * an equal split of bankroll (or 100 if no bankroll).
+ */
+function parseValidateLegs(args: ParsedArgs): { legs: ValidateBasketLeg[]; error?: string } {
+  // Two input modes: --legs "csv" with side+stake, OR --tickers + --probs/--side.
+  if (args.tickers) {
+    const tickers = args.tickers.split(',').map((t) => t.trim().toUpperCase()).filter(Boolean);
+    if (tickers.length === 0) return { legs: [], error: 'No tickers supplied.' };
+    const sideDefault = args.side ?? 'yes';
+    const totalStake = args.bankroll ?? 1000;
+    const perLeg = totalStake / tickers.length;
+    return {
+      legs: tickers.map((t) => ({ market_ticker: t, side: sideDefault, stake_usd: perLeg })),
+    };
+  }
+  // --legs csv: ticker:side[:stake]
+  if (args.probabilities && /[:]/.test(args.probabilities)) {
+    const legs: ValidateBasketLeg[] = [];
+    for (const piece of args.probabilities.split(',')) {
+      const parts = piece.trim().split(':');
+      if (parts.length < 1 || !parts[0]) continue;
+      const ticker = parts[0].toUpperCase();
+      const sideRaw = (parts[1] ?? 'yes').toLowerCase();
+      const side: 'yes' | 'no' = sideRaw === 'no' ? 'no' : 'yes';
+      const stake = parts[2] ? Number(parts[2]) : NaN;
+      legs.push({
+        market_ticker: ticker,
+        side,
+        stake_usd: Number.isFinite(stake) ? stake : (args.bankroll ?? 1000) / Math.max(1, args.probabilities!.split(',').length),
+      });
+    }
+    return { legs };
+  }
+  return { legs: [], error: 'Provide --tickers KX-A,KX-B OR --probs KX-A:yes:170,KX-B:no:160 to specify legs.' };
+}
+
+export async function handleBasketValidate(args: ParsedArgs): Promise<CLIResponse<BasketValidateResponse>> {
+  // --theme support: resolve to legs
+  let legs: ValidateBasketLeg[] = [];
+  if (args.theme) {
+    try {
+      const tickers = await tickersFromTheme(args.theme, args.topK ?? 1, 30);
+      if (tickers.length === 0) {
+        return wrapError('basket', 'THEME_EMPTY', `Theme "${args.theme}" resolved to 0 tickers.`);
+      }
+      const totalStake = args.bankroll ?? 1000;
+      const perLeg = totalStake / tickers.length;
+      const sideDefault = args.side ?? 'yes';
+      legs = tickers.map((t) => ({ market_ticker: t, side: sideDefault, stake_usd: perLeg }));
+    } catch (err) {
+      return wrapError('basket', 'THEME_RESOLVE', err instanceof Error ? err.message : String(err));
+    }
+  } else {
+    const parsed = parseValidateLegs(args);
+    if (parsed.error) return wrapError('basket', 'MISSING_LEGS', parsed.error);
+    legs = parsed.legs;
+  }
+  if (legs.length === 0) {
+    return wrapError('basket', 'MISSING_LEGS', 'No legs to validate.');
+  }
+  const body: ValidateBasketBody = {
+    legs,
+    bankroll_usd: args.bankroll,
+    correlation_window_days: args.windowDays ?? 30,
+    correlation_interval: args.correlationInterval,
+    max_pairwise_correlation: args.maxCorrelation,
+    calendar_clash_window_days: 7,
+  };
+  try {
+    const data = await validateBasket(body);
+    return wrapSuccess('basket', data);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return wrapError('basket', 'OCTAGON_ERROR', message);
+  }
+}
+
+export function formatBasketValidateHuman(data: BasketValidateResponse): string {
+  const lines: string[] = [];
+  const bankroll = data.bankroll_usd != null ? `$${data.bankroll_usd.toFixed(0)}` : 'n/a';
+  lines.push(`Basket validation — total stake $${data.total_stake_usd.toFixed(0)}, bankroll ${bankroll}, max leg ${(data.max_leg_pct * 100).toFixed(1)}%`);
+  if (data.max_pairwise_correlation != null) {
+    lines.push(`  Max pairwise correlation: ${data.max_pairwise_correlation.toFixed(2)}`);
+  } else {
+    lines.push('  Max pairwise correlation: n/a (no overlapping history)');
+  }
+  lines.push('');
+
+  // Cluster breakdown — flag any cluster with ≥2 legs
+  const thematic = Object.entries(data.cluster_breakdown_thematic);
+  if (thematic.length > 0) {
+    lines.push('Thematic cluster breakdown:');
+    for (const [clusterId, tickers] of thematic) {
+      const warn = tickers.length >= 2 ? ' ⚠' : '';
+      lines.push(`  Cluster ${clusterId}${warn}  ${tickers.join(', ')}`);
+    }
+    lines.push('');
+  }
+
+  if (data.unassigned_market_tickers.length > 0) {
+    lines.push(`Unassigned (no cluster): ${data.unassigned_market_tickers.join(', ')}`);
+    lines.push('');
+  }
+
+  // Pairwise correlations
+  if (data.pairwise_correlations.length > 0) {
+    lines.push('Pairwise correlations (top 10 by |corr|):');
+    const top = data.pairwise_correlations
+      .slice()
+      .sort((a, b) => Math.abs(b.correlation) - Math.abs(a.correlation))
+      .slice(0, 10);
+    const rows: string[][] = top.map((p) => [
+      p.ticker_a.length > 22 ? p.ticker_a.slice(0, 21) + '…' : p.ticker_a,
+      p.ticker_b.length > 22 ? p.ticker_b.slice(0, 21) + '…' : p.ticker_b,
+      p.correlation.toFixed(3),
+    ]);
+    lines.push(formatTable(['Ticker A', 'Ticker B', 'Corr'], rows));
+    lines.push('');
+  }
+
+  if (data.calendar_clashes.length > 0) {
+    lines.push(`Calendar clashes (${data.calendar_clashes.length} weeks):`);
+    for (const c of data.calendar_clashes) {
+      lines.push(`  ${c.window_start.slice(0, 10)} → ${c.window_end.slice(0, 10)}: ${c.market_tickers.join(', ')}`);
+    }
+    lines.push('');
+  }
+
+  if (data.duplicate_underliers.length > 0) {
+    lines.push(`Duplicate underliers (same event):`);
+    for (const d of data.duplicate_underliers) {
+      lines.push(`  ${d.event_ticker}: ${d.market_tickers.join(', ')}`);
+    }
+    lines.push('');
+  }
+
+  if (data.warnings.length > 0) {
+    lines.push('⚠ Warnings:');
+    for (const w of data.warnings) lines.push(`  • ${w}`);
+  } else {
+    lines.push('✓ No warnings.');
+  }
+  return lines.join('\n');
+}
+
+// Re-export for use by handleBasket below
+export { getMarketsEdge };
+
 // ─── Dispatcher ─────────────────────────────────────────────────────────────
 
 export type BasketResult =
   | { sub: 'build'; data: BasketBuildResponse }
   | { sub: 'backtest'; data: BasketBacktestResponse }
   | { sub: 'size'; data: BasketSizeResponse }
-  | { sub: 'candles'; data: BasketCandlesResponse };
+  | { sub: 'candles'; data: BasketCandlesResponse }
+  | { sub: 'validate'; data: BasketValidateResponse };
 
 export async function handleBasket(args: ParsedArgs): Promise<CLIResponse<BasketResult>> {
   const sub = args.positionalArgs[0]?.toLowerCase();
@@ -381,7 +582,11 @@ export async function handleBasket(args: ParsedArgs): Promise<CLIResponse<Basket
     const resp = await handleBasketCandles(args);
     return liftBasket(resp, 'candles');
   }
-  return wrapError('basket', 'MISSING_SUBCOMMAND', 'Usage: basket <build|backtest|size|candles> [...]');
+  if (sub === 'validate') {
+    const resp = await handleBasketValidate(args);
+    return liftBasket(resp, 'validate');
+  }
+  return wrapError('basket', 'MISSING_SUBCOMMAND', 'Usage: basket <build|backtest|size|candles|validate> [...]');
 }
 
 function liftBasket<T>(resp: CLIResponse<T>, sub: BasketResult['sub']): CLIResponse<BasketResult> {
@@ -398,5 +603,6 @@ export function formatBasketHuman(result: BasketResult): string {
   if (result.sub === 'build') return formatBasketBuildHuman(result.data);
   if (result.sub === 'backtest') return formatBasketBacktestHuman(result.data);
   if (result.sub === 'size') return formatBasketSizeHuman(result.data);
+  if (result.sub === 'validate') return formatBasketValidateHuman(result.data);
   return formatBasketCandlesHuman(result.data);
 }

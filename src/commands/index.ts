@@ -18,7 +18,7 @@ function defaultArgs(overrides: Partial<ParsedArgs>): ParsedArgs {
     verbose: false, performance: false, resolved: false,
     unresolved: false,
     behavioral: false, ranked: false, showCluster: false,
-    activeOnly: false,
+    activeOnly: false, cells: false, autoProbs: false,
     parseErrors: [],
     ...overrides,
   };

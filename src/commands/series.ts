@@ -13,8 +13,12 @@ import type { ParsedArgs } from './parse-args.js';
 import {
   searchKalshiMarkets,
   getBasketCandles,
+  listKalshiSeries,
+  getSeriesEvents,
   type KalshiMarketRow,
   type BasketCandlesResponse,
+  type SeriesRollupRow,
+  type SeriesEventRow,
 } from '../scan/octagon-kalshi-api.js';
 import { formatTable } from './scan-formatters.js';
 
@@ -155,8 +159,10 @@ async function fetchUniverse(opts: {
 
 export type SeriesResult =
   | { kind: 'list'; data: SeriesRollup[]; total_markets: number }
+  | { kind: 'server-list'; data: SeriesRollupRow[]; has_more: boolean }
   | { kind: 'detail'; series_ticker: string; rollup: SeriesRollup; markets: KalshiMarketRow[] }
-  | { kind: 'candles'; series_ticker: string; tickers_used: string[]; data: BasketCandlesResponse };
+  | { kind: 'candles'; series_ticker: string; tickers_used: string[]; data: BasketCandlesResponse }
+  | { kind: 'events'; series_ticker: string; data: SeriesEventRow[]; has_more: boolean };
 
 export async function handleSeries(args: ParsedArgs): Promise<CLIResponse<SeriesResult>> {
   try {
@@ -168,25 +174,34 @@ export async function handleSeries(args: ParsedArgs): Promise<CLIResponse<Series
       if (!seriesTicker) {
         return wrapError('series', 'MISSING_SERIES', 'Usage: series candles <series_ticker> [--timeframe 1y]');
       }
-      // Octagon's series_ticker field is null on every row, so we filter the
-      // universe by market_ticker prefix client-side instead.
-      const all = await fetchUniverse({});
-      const markets = all.filter((m) => m.market_ticker.toUpperCase().startsWith(seriesTicker + '-') || m.market_ticker.toUpperCase() === seriesTicker);
-      if (markets.length === 0) {
+      // Server-side prefix match — replaces the old paginate-then-filter dance.
+      const topN = args.topK ?? 20;
+      const page = await searchKalshiMarkets({
+        series_prefix: seriesTicker,
+        sort_by: 'volume_24h',
+        limit: topN,
+      });
+      if (page.data.length === 0) {
         return wrapError('series', 'EMPTY_SERIES', `No markets found for series ${seriesTicker}`);
       }
-      // Cap to top-N by volume to keep request size sane (basket API limits)
-      const topN = args.topK ?? 20;
-      const tickers = markets
-        .slice()
-        .sort((a, b) => (b.volume_24h ?? 0) - (a.volume_24h ?? 0))
-        .slice(0, topN)
-        .map((m) => m.market_ticker);
+      const tickers = page.data.map((m) => m.market_ticker);
       const data = await getBasketCandles({ market_tickers: tickers, timeframe: args.timeframe });
       return wrapSuccess('series', { kind: 'candles', series_ticker: seriesTicker, tickers_used: tickers, data });
     }
 
-    // series search <query> [--min-volume N]
+    // series events <ticker> — list events in a series (new endpoint)
+    if (positional === 'events') {
+      const seriesTicker = (args.positionalArgs[1] ?? args.seriesTicker)?.toUpperCase();
+      if (!seriesTicker) {
+        return wrapError('series', 'MISSING_SERIES', 'Usage: series events <series_ticker> [--limit N] [-q "filter"]');
+      }
+      const resp = await getSeriesEvents(seriesTicker, { limit: args.limit, q: args.query });
+      return wrapSuccess('series', {
+        kind: 'events', series_ticker: seriesTicker, data: resp.data, has_more: !!resp.has_more,
+      });
+    }
+
+    // series search <query> [--min-volume N] — keyword search rolled up by series
     if (positional === 'search') {
       const q = args.positionalArgs.slice(1).join(' ');
       if (!q) {
@@ -198,34 +213,36 @@ export async function handleSeries(args: ParsedArgs): Promise<CLIResponse<Series
       return wrapSuccess('series', { kind: 'list', data: limited, total_markets: markets.length });
     }
 
-    // series <SERIES_TICKER> — drill into one series
+    // series <SERIES_TICKER> — drill into one series (server-side prefix match)
     if (args.positionalArgs[0] && args.positionalArgs[0].toUpperCase().startsWith('KX')) {
       const seriesTicker = args.positionalArgs[0].toUpperCase();
-      const all = await fetchUniverse({});
-      const markets = all.filter(
-        (m) => m.market_ticker.toUpperCase().startsWith(seriesTicker + '-') || m.market_ticker.toUpperCase() === seriesTicker,
-      );
-      if (markets.length === 0) {
+      const limit = args.limit ?? 30;
+      const page = await searchKalshiMarkets({
+        series_prefix: seriesTicker,
+        sort_by: 'volume_24h',
+        limit,
+      });
+      if (page.data.length === 0) {
         return wrapError('series', 'EMPTY_SERIES', `No markets found for series ${seriesTicker}`);
       }
-      const rollup = rollupBySeries(markets)[0];
-      markets.sort((a, b) => (b.volume_24h ?? 0) - (a.volume_24h ?? 0));
+      const rollup = rollupBySeries(page.data)[0];
       return wrapSuccess('series', {
-        kind: 'detail',
-        series_ticker: seriesTicker,
-        rollup,
-        markets: markets.slice(0, args.limit ?? 30),
+        kind: 'detail', series_ticker: seriesTicker, rollup, markets: page.data,
       });
     }
 
-    // series list [--category C] [--min-volume N] [--limit N]
-    const markets = await fetchUniverse({
+    // series list [--category C] [--min-volume N] [--limit N] [--series-prefix KX]
+    // Uses the new server-side /kalshi/series rollup endpoint — 1 call vs paginated reduce.
+    const serverPage = await listKalshiSeries({
+      series_prefix: args.seriesTicker,
       category: args.category,
       min_volume_24h: args.minVolume,
+      sort_by: 'total_volume_24h',
+      limit: args.limit ?? 50,
     });
-    const rollups = rollupBySeries(markets).sort((a, b) => b.total_volume_24h - a.total_volume_24h);
-    const limited = rollups.slice(0, args.limit ?? 50);
-    return wrapSuccess('series', { kind: 'list', data: limited, total_markets: markets.length });
+    return wrapSuccess('series', {
+      kind: 'server-list', data: serverPage.data, has_more: !!serverPage.has_more,
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return wrapError('series', 'OCTAGON_ERROR', message);
@@ -236,8 +253,57 @@ export async function handleSeries(args: ParsedArgs): Promise<CLIResponse<Series
 
 export function formatSeriesHuman(result: SeriesResult): string {
   if (result.kind === 'list') return formatSeriesList(result.data, result.total_markets);
+  if (result.kind === 'server-list') return formatServerSeriesList(result.data, result.has_more);
   if (result.kind === 'detail') return formatSeriesDetail(result.series_ticker, result.rollup, result.markets);
+  if (result.kind === 'events') return formatSeriesEvents(result.series_ticker, result.data, result.has_more);
   return formatSeriesCandles(result.series_ticker, result.tickers_used, result.data);
+}
+
+function formatServerSeriesList(rows: SeriesRollupRow[], hasMore: boolean): string {
+  const lines: string[] = [];
+  const more = hasMore ? ' (more available)' : '';
+  lines.push(`Series rollup — ${rows.length} series${more}, sorted by 24h volume (server-side)`);
+  lines.push('');
+  if (rows.length === 0) {
+    lines.push('No series match.');
+    return lines.join('\n');
+  }
+  const tableRows: string[][] = rows.map((r) => [
+    r.series_ticker,
+    truncate(r.series_title ?? r.dominant_category ?? '-', 30),
+    String(r.active_count),
+    String(r.market_count),
+    fmtVol(r.total_volume_24h),
+    r.dominant_category ?? '-',
+    (r.last_seen_at ?? '').slice(0, 10),
+  ]);
+  lines.push(formatTable(
+    ['Series', 'Title / Category', 'Active', 'Total', '24h Vol', 'Dom Cat', 'Last seen'],
+    tableRows,
+  ));
+  lines.push('');
+  lines.push('Use "series <SERIES>" to drill in, "series events <SERIES>" to see events, "series candles <SERIES>" for NAV.');
+  return lines.join('\n');
+}
+
+function formatSeriesEvents(seriesTicker: string, events: SeriesEventRow[], hasMore: boolean): string {
+  const lines: string[] = [];
+  const more = hasMore ? ' (more available)' : '';
+  lines.push(`Events in series ${seriesTicker} — ${events.length} shown${more}`);
+  lines.push('');
+  if (events.length === 0) {
+    lines.push('No events in this series.');
+    return lines.join('\n');
+  }
+  const rows: string[][] = events.map((e) => [
+    e.event_ticker,
+    truncate(e.title ?? '', 45),
+    e.category ?? '-',
+    (e.close_time ?? '').slice(0, 10) || '-',
+    e.has_report ? '✓' : '-',
+  ]);
+  lines.push(formatTable(['Event', 'Title', 'Category', 'Closes', 'Report'], rows));
+  return lines.join('\n');
 }
 
 function formatSeriesList(rollups: SeriesRollup[], totalMarkets: number): string {

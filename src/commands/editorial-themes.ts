@@ -36,7 +36,8 @@ import {
   type EditorialThemeRow,
   type EditorialThemeWithSeries,
 } from '../db/editorial-themes.js';
-import { fetchUniverse, rollupBySeries, type SeriesRollup } from './series.js';
+import { type SeriesRollup } from './series.js';
+import { listKalshiSeries, type SeriesRollupRow } from '../scan/octagon-kalshi-api.js';
 import { formatTable } from './scan-formatters.js';
 
 function truncate(s: string, max: number): string {
@@ -279,11 +280,27 @@ async function reportHandler(db: ReturnType<typeof getDb>, args: ParsedArgs): Pr
   if (themes.length === 0) {
     return wrapError('themes', 'EMPTY_REGISTRY', 'No editorial themes registered. Run `themes import` first.');
   }
-  // Single universe fetch — rollup gives us volume data per series; we then
-  // attribute series back to themes.
-  const universe = await fetchUniverse({});
-  const allRollups = rollupBySeries(universe);
-  const rollupByTicker = new Map(allRollups.map((r) => [r.series_ticker, r]));
+  // Single server-side rollup call instead of the old paginate-then-reduce.
+  // Pull a generous page (most universes < 200 series).
+  const allRollups: SeriesRollupRow[] = [];
+  let cursor: string | undefined;
+  for (let i = 0; i < 5; i++) {
+    const page = await listKalshiSeries({ limit: 200, cursor });
+    allRollups.push(...page.data);
+    if (!page.has_more || !page.next_cursor) break;
+    cursor = page.next_cursor;
+  }
+  const rollupByTicker = new Map(allRollups.map((r) => [r.series_ticker, {
+    series_ticker: r.series_ticker,
+    market_count: r.market_count,
+    active_count: r.active_count,
+    total_volume_24h: r.total_volume_24h,
+    total_open_interest: 0,
+    dominant_category: r.dominant_category,
+    sample_titles: r.series_title ? [r.series_title] : [],
+    earliest_close: null as string | null,
+    latest_close: null as string | null,
+  } as SeriesRollup]));
 
   const minSearch = args.minReturn !== undefined ? Math.floor(args.minReturn * 1_000_000) : (args.windowDays ?? 0);
   // ^ reuse `--min-return` parsed as fraction of millions, or `--window-days` as raw integer;

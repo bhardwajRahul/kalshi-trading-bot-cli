@@ -60,6 +60,7 @@ export interface ParsedArgs {
   maxCorrelation?: number;
   minReturn?: number;
   seriesTicker?: string;
+  seriesPrefix?: string;
   sortBy?: string;
   probabilities?: string;
   tickers?: string;
@@ -67,6 +68,9 @@ export interface ParsedArgs {
   showCluster: boolean;
   aggregateBy?: 'series';
   activeOnly: boolean;
+  sides?: string;          // comma-separated yes/no per ticker for correlate
+  cells: boolean;          // include_cell_detail for correlate
+  autoProbs: boolean;      // basket size: auto-fetch leg probabilities via markets/edge
   parseErrors: string[];
 }
 
@@ -114,6 +118,7 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): ParsedArgs {
   let maxCorrelation: number | undefined;
   let minReturn: number | undefined;
   let seriesTicker: string | undefined;
+  let seriesPrefix: string | undefined;
   let sortBy: string | undefined;
   let probabilities: string | undefined;
   let tickers: string | undefined;
@@ -121,6 +126,9 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): ParsedArgs {
   let showCluster = false;
   let aggregateBy: 'series' | undefined;
   let activeOnly = false;
+  let sides: string | undefined;
+  let cells = false;
+  let autoProbs = false;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -344,6 +352,9 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): ParsedArgs {
     } else if (arg === '--series') {
       const val = argv[++i];
       if (val != null) { seriesTicker = val; } else { parseErrors.push('--series requires a value'); }
+    } else if (arg === '--series-prefix') {
+      const val = argv[++i];
+      if (val != null) { seriesPrefix = val.toUpperCase(); } else { parseErrors.push('--series-prefix requires a value'); }
     } else if (arg === '--sort-by') {
       const val = argv[++i];
       if (val != null) { sortBy = val; } else { parseErrors.push('--sort-by requires a value'); }
@@ -362,6 +373,13 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): ParsedArgs {
       else { parseErrors.push(`Invalid --aggregate-by value: "${val}" (expected "series")`); }
     } else if (arg === '--active-only') {
       activeOnly = true;
+    } else if (arg === '--sides') {
+      const val = argv[++i];
+      if (val != null) { sides = val; } else { parseErrors.push('--sides requires a value (e.g., --sides yes,no,yes)'); }
+    } else if (arg === '--cells') {
+      cells = true;
+    } else if (arg === '--auto-probs') {
+      autoProbs = true;
     } else if (arg.startsWith('--')) {
       parseErrors.push(`Unknown flag: ${arg}`);
     } else {
@@ -391,6 +409,7 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): ParsedArgs {
     topK, behavioral, ranked, labelContains, closeBefore, windowDays, correlationInterval, timeframe,
     weights, bankroll, kellyMultiplier, n, maxPerCluster, maxCorrelation, minReturn, seriesTicker,
     sortBy, probabilities, tickers, query, showCluster, aggregateBy, activeOnly,
+    seriesPrefix, sides, cells, autoProbs,
     parseErrors,
   };
 }

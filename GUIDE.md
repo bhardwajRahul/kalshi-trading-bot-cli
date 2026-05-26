@@ -104,7 +104,12 @@ Quick commands that bypass the AI agent and call the Kalshi or Octagon API direc
 | `/basket backtest` | Total return / Sharpe / max DD on a basket | `/basket backtest --tickers KX-A,KX-B --timeframe 1y` |
 | `/basket backtest --theme <name>` | Backtest an editorial theme NAV | `/basket backtest --theme "Iran Escalation"` |
 | `/basket size` | Fractional Kelly sizing for picked legs | `/basket size --bankroll 1000 --kelly 0.25 --probs KX-A:0.62` |
+| `/basket size --auto-probs` | Auto-fetch probabilities via `markets/edge` | `/basket size --auto-probs --theme "AI Race Milestones" --bankroll 1000` |
+| `/basket validate` | Portfolio diagnostics (clusters, corr, clashes, warnings) | `/basket validate --theme "Iran Escalation" --bankroll 1000` |
 | `/basket candles` | OHLC bars for a weighted basket NAV | `/basket candles --tickers KX-A,KX-B --timeframe 6m` |
+| `/series events <ticker>` | Events inside a series | `/series events KXIPO` |
+| `/correlate --sides yes,no` | Side-aware correlation (sign-flipped) | `/correlate KX-A KX-B --sides yes,no` |
+| `/correlate --cells` | Cell detail (overlap_count, reason) | `/correlate KX-A KX-B --cells` |
 | `/events` / `/events <ticker>` | Octagon events + outcome ladder | `/events KXFEDCHAIRNOM-29` |
 | `/series` / `/series <ticker>` | Kalshi series rollup | `/series KXBTCD` |
 | `/series candles <ticker>` | Series-level NAV | `/series candles KXBTCD --timeframe 3m` |

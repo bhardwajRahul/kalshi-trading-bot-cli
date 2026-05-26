@@ -127,7 +127,10 @@ Type help for commands, or just ask a question.
 | `basket backtest` | NAV summary: total return, Sharpe, max drawdown, win rate |
 | `basket size` | Fractional Kelly sizing for picked legs |
 | `basket candles` | OHLC bars for a weighted basket NAV |
+| `basket validate` | One-call portfolio diagnostics (clusters, correlations, calendar clashes, warnings) |
+| `basket size --auto-probs` | Auto-fetch model probabilities via `markets/edge` and Kelly-size |
 | `basket backtest --theme <name>` | Resolve an editorial theme to a NAV basket and backtest it |
+| `series events <ticker>` | List events inside a series |
 | `events` / `events <ticker>` | Octagon events list + outcome ladder per event |
 | `series` / `series <ticker>` | Kalshi series rollup (24h vol, market count) |
 | `series candles <ticker>` | Series-level NAV (basket of top sub-markets) |
@@ -192,9 +195,13 @@ Type help for commands, or just ask a question.
 | `--tickers <csv>` | Comma-separated tickers (correlate, basket backtest/candles) |
 | `-q "text"` | Free-text anchor for similar / basket build |
 | `--show-cluster` | Print cluster membership only (peers) |
-| `--theme <name>` | Resolve an editorial theme to a ticker list (basket backtest/candles) |
+| `--theme <name>` | Resolve an editorial theme to a ticker list (basket backtest/candles/validate/size) |
 | `--aggregate-by series` | Roll up search results to the series level |
 | `--active-only` | Drop non-active markets (defensive flag — open universe by default) |
+| `--series-prefix <prefix>` | Server-side series prefix match (e.g. `KXBTC` matches KXBTCD, KXBTCY, ...) |
+| `--sides yes,no,yes` | Per-ticker side for `correlate` (sign-flipped) |
+| `--cells` | Include per-cell detail (overlap, reason) in `correlate` |
+| `--auto-probs` | `basket size`: auto-fetch model probabilities via `markets/edge` |
 
 ### Discovery & Portfolio (Octagon-powered)
 
@@ -239,6 +246,16 @@ kalshi basket backtest --tickers KX-A,KX-B,KX-C --weights 0.4,0.4,0.2 --timefram
 
 # Kelly-size legs you've already picked
 kalshi basket size --bankroll 1000 --kelly 0.25 --probs KX-A:0.62,KX-B:0.55
+
+# Or let Octagon's model fill in the probabilities for you
+kalshi basket size --auto-probs --tickers KX-A,KX-B,KX-C --bankroll 1000 --kelly 0.25
+kalshi basket size --auto-probs --theme "AI Race Milestones" --bankroll 1000 --kelly 0.25
+
+# Sanity-check a proposed basket before placing orders (one call, server-side)
+kalshi basket validate --tickers KX-A,KX-B --bankroll 1000 --max-corr 0.5
+kalshi basket validate --theme "Iran Escalation" --bankroll 1000
+#   → cluster breakdown, pairwise correlations (top by |corr|), calendar
+#     clashes (weeks where many legs resolve), duplicate underliers, warnings.
 ```
 
 ### Editorial Theme Dashboard

@@ -187,29 +187,25 @@ export async function dispatch(args: ParsedArgs): Promise<void> {
           process.exit(resp.ok ? ExitCode.SUCCESS : ExitCode.USER_ERROR);
           return;
         }
-        // Fetch a generous page so client-side sort gives a reasonable top-N.
-        const rawLimit = args.sortBy ? Math.max(args.limit ?? 30, 200) : (args.limit ?? 30);
+        // sort_by is now server-side (true top-N across the whole universe);
+        // series_prefix lets us tree-browse (KXBTC matches all Bitcoin series).
+        const serverSortBy = (args.sortBy === 'volume_24h' || args.sortBy === 'close_time' || args.sortBy === 'last_price')
+          ? args.sortBy
+          : undefined;
         const page = await searchKalshiMarkets({
           q: query,
           category: args.category,
           series_ticker: args.seriesTicker,
+          series_prefix: args.seriesPrefix,
           min_volume_24h: args.minVolume,
           close_before: args.closeBefore,
-          limit: rawLimit,
+          sort_by: serverSortBy,
+          limit: args.limit ?? 30,
         });
-        // --active-only is already implicit (Octagon /kalshi/markets returns the open
-        // universe), but enforce defensively in case the API surface relaxes later.
-        let rows = args.activeOnly
+        // --active-only is defensive — the live universe is active by default.
+        const rows = args.activeOnly
           ? page.data.filter((m) => m.status === 'active' || m.status === 'open')
           : page.data;
-        if (args.sortBy === 'volume_24h') {
-          rows = rows.slice().sort((a, b) => (b.volume_24h ?? 0) - (a.volume_24h ?? 0));
-        } else if (args.sortBy === 'close_time') {
-          rows = rows.slice().sort((a, b) => (a.close_time ?? 'z').localeCompare(b.close_time ?? 'z'));
-        } else if (args.sortBy === 'last_price') {
-          rows = rows.slice().sort((a, b) => (b.last_price ?? 0) - (a.last_price ?? 0));
-        }
-        if (args.sortBy) rows = rows.slice(0, args.limit ?? 30);
         const filteredPage = { ...page, data: rows };
         if (json) {
           console.log(JSON.stringify(wrapSuccess('search', filteredPage)));

@@ -1,7 +1,7 @@
 import { wrapSuccess, wrapError } from './json.js';
 import type { CLIResponse } from './json.js';
 import type { ParsedArgs } from './parse-args.js';
-import { getCorrelations, type CorrelationResponse } from '../scan/octagon-kalshi-api.js';
+import { getCorrelations, type CorrelationResponseWithSides } from '../scan/octagon-kalshi-api.js';
 import { formatTable } from './scan-formatters.js';
 
 function shortTicker(t: string, max = 18): string {
@@ -23,21 +23,34 @@ function collectTickers(args: ParsedArgs): string[] {
   return Array.from(set);
 }
 
-export async function handleCorrelate(args: ParsedArgs): Promise<CLIResponse<CorrelationResponse>> {
+export async function handleCorrelate(args: ParsedArgs): Promise<CLIResponse<CorrelationResponseWithSides>> {
   const tickers = collectTickers(args);
   if (tickers.length < 2) {
     return wrapError(
       'correlate',
       'TOO_FEW_TICKERS',
-      'Usage: correlate <ticker1> <ticker2> [...] [--window-days N] [--correlation-interval 1h|1d]',
+      'Usage: correlate <ticker1> <ticker2> [...] [--window-days N] [--sides yes,no,yes] [--cells]',
     );
   }
   if (tickers.length > 100) {
     return wrapError('correlate', 'TOO_MANY_TICKERS', 'At most 100 tickers allowed.');
   }
+
+  // --sides yes,no,yes — must match ticker count (server enforces this too)
+  let sides: ('yes' | 'no')[] | undefined;
+  if (args.sides) {
+    sides = args.sides.split(',').map((s) => (s.trim().toLowerCase() === 'no' ? 'no' : 'yes'));
+    if (sides.length !== tickers.length) {
+      return wrapError('correlate', 'SIDES_MISMATCH',
+        `--sides has ${sides.length} entries but ${tickers.length} tickers were supplied.`);
+    }
+  }
+
   try {
     const data = await getCorrelations({
       market_tickers: tickers,
+      sides,
+      include_cell_detail: args.cells || undefined,
       window_days: args.windowDays,
       interval: args.correlationInterval,
     });
@@ -48,9 +61,10 @@ export async function handleCorrelate(args: ParsedArgs): Promise<CLIResponse<Cor
   }
 }
 
-export function formatCorrelationHuman(data: CorrelationResponse): string {
+export function formatCorrelationHuman(data: CorrelationResponseWithSides): string {
   const lines: string[] = [];
-  lines.push(`Correlation matrix — ${data.tickers.length} markets, ${data.window_days}d window, interval ${data.interval}`);
+  const sidesLabel = data.sides ? ` (sides: ${data.sides.join(',')})` : '';
+  lines.push(`Correlation matrix — ${data.tickers.length} markets${sidesLabel}, ${data.window_days}d window, interval ${data.interval}`);
   if (data.missing.length > 0) {
     lines.push(`  Dropped (no candle data): ${data.missing.join(', ')}`);
   }
@@ -79,6 +93,19 @@ export function formatCorrelationHuman(data: CorrelationResponse): string {
       p.correlation.toFixed(3),
     ]);
     lines.push(formatTable(['Ticker A', 'Ticker B', 'Corr'], rows));
+  }
+
+  if (data.cells_detail && data.cells_detail.length > 0) {
+    lines.push('');
+    lines.push('Cell detail:');
+    const rows: string[][] = data.cells_detail.map((c) => [
+      shortTicker(c.ticker_a, 20),
+      shortTicker(c.ticker_b, 20),
+      c.correlation == null ? '-' : c.correlation.toFixed(3),
+      String(c.overlap_count),
+      c.reason,
+    ]);
+    lines.push(formatTable(['Ticker A', 'Ticker B', 'Corr', 'Overlap', 'Reason'], rows));
   }
 
   return lines.join('\n');

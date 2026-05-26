@@ -274,9 +274,11 @@ export interface SearchMarketsParams {
   q?: string;
   category?: string;
   series_ticker?: string;
+  series_prefix?: string;
   event_ticker?: string;
   close_before?: string;
   min_volume_24h?: number;
+  sort_by?: 'volume_24h' | 'close_time' | 'last_price';
   limit?: number;
   cursor?: string;
 }
@@ -336,12 +338,27 @@ export function getClusterPeers(marketTicker: string, params: { kind?: 'thematic
 
 export interface CorrelationsBody {
   market_tickers: string[];
+  sides?: ('yes' | 'no')[];
+  include_cell_detail?: boolean;
   window_days?: number;
   interval?: '1h' | '1d';
 }
 
-export function getCorrelations(body: CorrelationsBody): Promise<CorrelationResponse> {
-  return kalshiApi<CorrelationResponse>('POST', '/markets/correlations', { body });
+export interface CorrelationCellDetail {
+  ticker_a: string;
+  ticker_b: string;
+  correlation: number | null;
+  overlap_count: number;
+  reason: 'ok' | 'insufficient_overlap' | 'zero_variance';
+}
+
+export interface CorrelationResponseWithSides extends CorrelationResponse {
+  sides?: ('yes' | 'no')[];
+  cells_detail?: CorrelationCellDetail[] | null;
+}
+
+export function getCorrelations(body: CorrelationsBody): Promise<CorrelationResponseWithSides> {
+  return kalshiApi<CorrelationResponseWithSides>('POST', '/markets/correlations', { body });
 }
 
 export interface BasketCandlesBody {
@@ -428,4 +445,119 @@ export interface MarketsWithEdgeParams {
 
 export function getMarketsWithEdge(params: MarketsWithEdgeParams = {}): Promise<MarketsWithEdgeResponse> {
   return kalshiApi<MarketsWithEdgeResponse>('GET', '/markets-with-edge', { params });
+}
+
+// ─── Endpoints added in subsequent sessions ─────────────────────────────────
+
+export interface PerTickerEdgeRow {
+  input_ticker: string;
+  market_ticker: string | null;
+  event_ticker: string | null;
+  title: string | null;
+  series_category: string | null;
+  model_probability: number | null;   // 0-1 fraction per the new endpoint doc
+  market_probability: number | null;
+  edge_pp: number | null;
+  expected_return: number | null;
+  confidence_score: number | null;
+  total_volume: number | null;
+  total_open_interest: number | null;
+  status: 'scored' | 'unscored';
+  captured_at: string | null;
+}
+
+export interface PerTickerEdgeResponse {
+  run_id: string;
+  captured_at: string;
+  data: PerTickerEdgeRow[];
+}
+
+export function getMarketsEdge(body: { tickers: string[]; run_id?: string }): Promise<PerTickerEdgeResponse> {
+  return kalshiApi<PerTickerEdgeResponse>('POST', '/markets/edge', { body });
+}
+
+export function getEventMarkets(
+  eventTicker: string,
+  params: { limit?: number; cursor?: string; min_volume_24h?: number } = {},
+): Promise<{ event_ticker: string; data: KalshiMarketRow[]; next_cursor?: string | null; has_more?: boolean }> {
+  return kalshiApi('GET', `/events/${encodeURIComponent(eventTicker)}/markets`, { params });
+}
+
+export interface SeriesRollupRow {
+  series_ticker: string;
+  series_title: string | null;
+  market_count: number;
+  active_count: number;
+  total_volume_24h: number;
+  dominant_category: string | null;
+  categories: string[];
+  last_seen_at: string;
+}
+
+export interface SeriesListParams {
+  series_prefix?: string;
+  category?: string;
+  min_volume_24h?: number;
+  sort_by?: 'total_volume_24h' | 'market_count' | 'active_count';
+  limit?: number;
+  cursor?: string;
+}
+
+export function listKalshiSeries(params: SeriesListParams = {}): Promise<PagedResult<SeriesRollupRow>> {
+  return kalshiApi<PagedResult<SeriesRollupRow>>('GET', '/series', { params });
+}
+
+export interface SeriesEventRow {
+  event_ticker: string;
+  series_ticker: string;
+  title: string;
+  sub_title?: string | null;
+  category?: string | null;
+  mutually_exclusive?: boolean | null;
+  available_on_brokers?: boolean | null;
+  last_updated_ts?: string | null;
+  kalshi_url?: string | null;
+  kalshi_image_url?: string | null;
+  has_report?: boolean;
+  close_time?: string | null;
+}
+
+export function getSeriesEvents(
+  seriesTicker: string,
+  params: { limit?: number; cursor?: string; q?: string } = {},
+): Promise<{ series_ticker: string; data: SeriesEventRow[]; next_cursor?: string | null; has_more?: boolean }> {
+  return kalshiApi('GET', `/series/${encodeURIComponent(seriesTicker)}/events`, { params });
+}
+
+export interface ValidateBasketLeg {
+  market_ticker: string;
+  side: 'yes' | 'no';
+  stake_usd: number;
+}
+
+export interface ValidateBasketBody {
+  legs: ValidateBasketLeg[];
+  bankroll_usd?: number;
+  correlation_window_days?: number;
+  correlation_interval?: '1h' | '1d';
+  max_pairwise_correlation?: number;
+  calendar_clash_window_days?: number;
+}
+
+export interface BasketValidateResponse {
+  total_stake_usd: number;
+  bankroll_usd: number | null;
+  max_leg_pct: number;
+  cluster_breakdown_thematic: Record<string, string[]>;
+  cluster_breakdown_behavioral: Record<string, string[]>;
+  unassigned_market_tickers: string[];
+  max_pairwise_correlation: number | null;
+  pairwise_correlations: { ticker_a: string; ticker_b: string; correlation: number }[];
+  calendar_clashes: { window_start: string; window_end: string; market_tickers: string[] }[];
+  duplicate_underliers: { event_ticker: string; market_tickers: string[] }[];
+  warnings: string[];
+}
+
+export function validateBasket(body: ValidateBasketBody): Promise<BasketValidateResponse> {
+  return kalshiApi<BasketValidateResponse>('POST', '/baskets/validate', { body });
 }
