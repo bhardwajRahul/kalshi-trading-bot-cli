@@ -138,6 +138,34 @@ ${p}init                       Launch the TUI with the setup wizard open
 ${p}help                       Show all commands
 ${p}help <command>             Show detailed help for a command`,
 
+    scripting: `**Scripting & Parallel Use** — for agents, pipelines, and parallel invocations
+
+The \`bunx kalshi-trading-bot-cli@latest …\` form is convenient for one-off use
+but has two gotchas under scripting:
+
+  1. Bun's install chatter ("Resolving dependencies", "Saved lockfile") leaks
+     into stdout before our CLI runs, corrupting JSON pipelines.
+  2. Parallel \`bunx\` invocations race on the install cache and fail with
+     "Failed to link …: EEXIST" / "could not determine executable"
+     (oven-sh/bun#12917, still open as of Bun 1.3.14).
+
+**Recommended for scripts and agents:**
+
+  bun add -g kalshi-trading-bot-cli           # install once; emits no chatter on subsequent runs
+  parallel -j 30 'kalshi analyze {} --json' ::: TICKER1 TICKER2 …
+
+**If you must use bunx:**
+
+  bunx --silent kalshi-trading-bot-cli@latest analyze KX-A --json
+                ^^^^^^^^ suppresses install chatter; keeps our stdout clean
+
+For parallel bunx, pre-warm the cache serially before fanning out:
+
+  bunx --silent kalshi-trading-bot-cli@latest --version        # one-shot, warms cache
+  parallel -j 30 'bunx --silent kalshi-trading-bot-cli@latest analyze {} --json' ::: …
+
+See README → Scripting & Parallel Use for the full picture.`,
+
     similar: `**${p}similar** — Semantic market search (Octagon-powered)
 
 ${p}similar <ticker>                  Markets near this ticker by embedding distance

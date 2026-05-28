@@ -91,9 +91,45 @@ function modeFlagsFor(canonical: Subcommand, args: ParsedArgs): Record<string, s
   }
 }
 
+/**
+ * One-time stderr hint when a user pipes `--json` through `bunx` without
+ * `--silent`. Bunx prints install chatter to stdout *before* our process even
+ * starts, which corrupts JSON pipelines — `--silent` fixes it entirely, but
+ * users rarely discover that flag on their own. We can't strip the chatter
+ * (it's not in our stdout), but we can nudge them once.
+ *
+ * Heuristic: --json + non-TTY stdout + BUN_INSTALL_CACHE_DIR set (bunx sets
+ * this; `bun add -g` installs don't). Silenced after first emit by touching
+ * a sentinel file under ~/.kalshi-bot/.
+ */
+function maybeEmitBunxHint(args: ParsedArgs): void {
+  if (!args.json) return;
+  if (process.stdout.isTTY) return;
+  if (!process.env.BUN_INSTALL_CACHE_DIR) return;
+  try {
+    // Lazy require to avoid import cycle at module init
+    const { appPath } = require('../utils/paths.js') as { appPath: (...p: string[]) => string };
+    const { existsSync, writeFileSync, mkdirSync } = require('fs') as typeof import('fs');
+    const sentinel = appPath('.bunx-hint-shown');
+    if (existsSync(sentinel)) return;
+    process.stderr.write(
+      '[kalshi] Tip: for clean JSON output and parallel-safe scripting, install once with\n' +
+      '[kalshi]   bun add -g kalshi-trading-bot-cli\n' +
+      '[kalshi] then call `kalshi …` directly. Or use `bunx --silent` to suppress install\n' +
+      '[kalshi] chatter from this invocation. See README → Scripting & Parallel Use.\n',
+    );
+    const dir = appPath('.');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(sentinel, String(Date.now()));
+  } catch {
+    // Best-effort hint — never fail the actual command because of it.
+  }
+}
+
 export async function dispatch(args: ParsedArgs): Promise<void> {
   const { subcommand, json } = args;
   const resolved = resolveAlias(subcommand, args.positionalArgs);
+  maybeEmitBunxHint(args);
   trackEvent('cli_command', {
     command: resolved.canonical,
     subview: resolved.subview ?? '',
