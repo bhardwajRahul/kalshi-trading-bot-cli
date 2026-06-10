@@ -371,6 +371,7 @@ export async function runCli(options?: { forceSetup?: boolean }) {
       { value: 'cancel', label: 'cancel', description: 'Cancel an order' },
       { value: 'backtest', label: 'backtest', description: 'Model accuracy & edge scanner' },
       { value: 'help', label: 'help', description: 'Show help' },
+      { value: 'scripting', label: 'scripting', description: 'Tips for agents, pipelines, parallel use' },
       { value: 'setup', label: 'setup', description: 'Re-run setup wizard' },
     ];
     if (!typed) return topics;

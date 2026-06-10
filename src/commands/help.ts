@@ -24,9 +24,10 @@ Search flags (server-side path):
   --category <name>     Filter by category
   --series <ticker>     Filter to a series
   --min-volume <n>      Floor on 24h volume
-  --close-before <iso>  Only markets closing before
+  --close-before <iso>  Only markets closing before this timestamp
+  --days-to-close <n>   Shortcut: only markets closing in the next N days
   --limit <n>           Page size (default 30)
-  --sort-by <key>       volume_24h | close_time | last_price (client-side sort)
+  --sort-by <key>       volume_24h | close_time | last_price (server-side sort)
   --aggregate-by series Roll up results by series (calls series rollup)
   --active-only         Drop non-active markets (defensive; the live universe is active by default)
 
@@ -51,12 +52,22 @@ Flags:
 
     analyze: `**${p}analyze** — Deep market analysis
 
-${p}analyze <ticker>             Full analysis: edge, drivers, catalysts, Kelly sizing
-${p}analyze <ticker> ${ctx === 'cli' ? '--' : ''}refresh     Force fresh Octagon report
-${ctx === 'cli' ? `
+${p}analyze <ticker>                       Full analysis: edge, drivers, catalysts, Kelly sizing
+${p}analyze <ticker> ${ctx === 'cli' ? '--' : ''}refresh             Force fresh Octagon report
+
+Batch mode (one Octagon round-trip instead of N):
+${p}analyze KX-A KX-B KX-C                 Edge readout across 2-100 tickers
+${p}analyze --tickers KX-A,KX-B,KX-C       Same, comma-separated
+${p}analyze KX-A KX-B KX-C --json          For pipelines / scripting
+
+The batch mode hits POST /kalshi/markets/edge in one call and returns
+model_probability, market_probability, edge_pp, expected_return per ticker.
+Use single-ticker mode when you need the full deep-analysis pipeline
+(drivers, catalysts, Kelly sizing, risk gate).${ctx === 'cli' ? `
+
 Legacy aliases (still work):
-  ${p}edge [--ticker X]          Edge history / snapshots (default: last 24h)
-  ${p}edge --since <date>        Edges since date (e.g. 2026-03-01)` : ''}`,
+  ${p}edge [--ticker X]                    Edge history / snapshots (default: last 24h)
+  ${p}edge --since <date>                  Edges since date (e.g. 2026-03-01)` : ''}`,
 
     watch: `**${p}watch** — Live monitoring
 
@@ -137,6 +148,34 @@ ${p}init                       Launch the TUI with the setup wizard open
 
 ${p}help                       Show all commands
 ${p}help <command>             Show detailed help for a command`,
+
+    scripting: `**Scripting & Parallel Use** — for agents, pipelines, and parallel invocations
+
+The \`bunx kalshi-trading-bot-cli@latest …\` form is convenient for one-off use
+but has two gotchas under scripting:
+
+  1. Bun's install chatter ("Resolving dependencies", "Saved lockfile") leaks
+     into stdout before our CLI runs, corrupting JSON pipelines.
+  2. Parallel \`bunx\` invocations race on the install cache and fail with
+     "Failed to link …: EEXIST" / "could not determine executable".
+     See oven-sh/bun#12917 for upstream status.
+
+**Recommended for scripts and agents:**
+
+  bun add -g kalshi-trading-bot-cli           # install once; emits no chatter on subsequent runs
+  parallel -j 30 'kalshi analyze {} --json' ::: TICKER1 TICKER2 …
+
+**If you must use bunx:**
+
+  bunx --silent kalshi-trading-bot-cli@latest analyze KX-A --json
+                ^^^^^^^^ suppresses install chatter; keeps our stdout clean
+
+For parallel bunx, pre-warm the cache serially before fanning out:
+
+  bunx --silent kalshi-trading-bot-cli@latest --version        # one-shot, warms cache
+  parallel -j 30 'bunx --silent kalshi-trading-bot-cli@latest analyze {} --json' ::: …
+
+See README → Scripting & Parallel Use for the full picture.`,
 
     similar: `**${p}similar** — Semantic market search (Octagon-powered)
 

@@ -28,6 +28,8 @@ That's it — no clone, no install. The setup wizard runs automatically on first
 
 Prefer a global install? `bun add -g kalshi-trading-bot-cli` then run `kalshi`.
 
+> **Scripting and agent use** — for parallel invocations, `--json` consumers, or anything that pipes our output: **install globally and use the `kalshi` binary**, not `bunx`. See [Scripting & Parallel Use](#scripting--parallel-use) below for the gory details.
+
 Or work from a clone:
 
 ```bash
@@ -362,6 +364,37 @@ UNRESOLVED (105 markets)
 ### Demo Mode
 
 Set `KALSHI_USE_DEMO=true` in your `.env` to use Kalshi's demo environment. All trades are simulated — no real money at risk.
+
+## Scripting & Parallel Use
+
+The `bunx kalshi-trading-bot-cli@latest …` form is great for one-off interactive use, but it has two gotchas when you script against it:
+
+**1. Install chatter leaks into `--json` output.** Bun prints lines like `Resolving dependencies` and `Saved lockfile` to stdout *before* our CLI runs, which corrupts JSON pipelines.
+
+**2. Parallel invocations race on the install cache.** Running multiple `bunx kalshi-trading-bot-cli@latest …` calls in parallel can fail with `Failed to link …: EEXIST` and `could not determine executable`. See [oven-sh/bun#12917](https://github.com/oven-sh/bun/issues/12917) for current upstream status — `bunx`'s ephemeral install path isn't covered by the `bun install` global-store fix, so the workarounds below are still the recommended path.
+
+**Recommended pattern for scripts and agents:**
+
+```bash
+# Install once globally — this is parallel-safe and emits no install chatter on subsequent runs
+bun add -g kalshi-trading-bot-cli
+
+# Then use the `kalshi` binary directly — fan out as much as you want
+parallel -j 30 'kalshi analyze {} --json > {}.json' ::: KXBTC-26APR-B95000 KXETH-… …
+```
+
+**If you must use `bunx`:**
+
+```bash
+# --silent suppresses Bun's install chatter (keeps your CLI's stdout clean)
+bunx --silent kalshi-trading-bot-cli@latest analyze KXBTC-26APR-B95000 --json
+
+# For parallel bunx, pre-warm the cache serially first to dodge the link race
+bunx --silent kalshi-trading-bot-cli@latest --version    # one-shot, populates cache
+parallel -j 30 'bunx --silent kalshi-trading-bot-cli@latest analyze {} --json' ::: KXBTC-… …
+```
+
+Keep `@latest` if you want auto-update on every invocation; drop it after the first run if you've pinned a version and want speed.
 
 ## Agent Usage
 

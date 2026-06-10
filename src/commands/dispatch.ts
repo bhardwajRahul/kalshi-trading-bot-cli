@@ -91,9 +91,56 @@ function modeFlagsFor(canonical: Subcommand, args: ParsedArgs): Record<string, s
   }
 }
 
+/**
+ * One-time stderr hint when a user pipes `--json` through `bunx` without
+ * `--silent`. Bunx prints install chatter to stdout *before* our process even
+ * starts, which corrupts JSON pipelines — `--silent` fixes it entirely, but
+ * users rarely discover that flag on their own. We can't strip the chatter
+ * (it's not in our stdout), but we can nudge them once.
+ *
+ * Heuristic: --json + non-TTY stdout + BUN_INSTALL_CACHE_DIR set (bunx sets
+ * this; `bun add -g` installs don't). Silenced after first emit by touching
+ * a sentinel file under ~/.kalshi-bot/.
+ */
+async function maybeEmitBunxHint(args: ParsedArgs): Promise<void> {
+  if (!args.json) return;
+  if (process.stdout.isTTY) return;
+  if (!process.env.BUN_INSTALL_CACHE_DIR) return;
+  try {
+    // Dynamic ESM imports to avoid pulling these into the module graph at init.
+    const { appPath } = await import('../utils/paths.js');
+    const { existsSync, writeFileSync, mkdirSync } = await import('fs');
+    const sentinel = appPath('.bunx-hint-shown');
+    if (existsSync(sentinel)) return;
+    process.stderr.write(
+      '[kalshi] Tip: for clean JSON output and parallel-safe scripting, install once with\n' +
+      '[kalshi]   bun add -g kalshi-trading-bot-cli\n' +
+      '[kalshi] then call `kalshi …` directly. Or use `bunx --silent` to suppress install\n' +
+      '[kalshi] chatter from this invocation. See README → Scripting & Parallel Use.\n',
+    );
+    const dir = appPath('.');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(sentinel, String(Date.now()));
+  } catch {
+    // Best-effort hint — never fail the actual command because of it.
+  }
+}
+
+const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000;
+
 export async function dispatch(args: ParsedArgs): Promise<void> {
+  // --days-to-close N is ergonomic sugar over --close-before <iso>. Resolve
+  // it once here so every downstream command (search, events, series,
+  // catalysts, basket --theme, similar) gets the same filter without each
+  // handler reimplementing the arithmetic.
+  if (args.daysToClose !== undefined && !args.closeBefore) {
+    const target = new Date(Date.now() + args.daysToClose * MILLISECONDS_PER_DAY);
+    args.closeBefore = target.toISOString();
+  }
+
   const { subcommand, json } = args;
   const resolved = resolveAlias(subcommand, args.positionalArgs);
+  await maybeEmitBunxHint(args);
   trackEvent('cli_command', {
     command: resolved.canonical,
     subview: resolved.subview ?? '',
@@ -307,6 +354,27 @@ export async function dispatch(args: ParsedArgs): Promise<void> {
 
     // ─── analyze ───────────────────────────────────────────────────────
     if (resolved.canonical === 'analyze') {
+      // Batch mode: 2+ positional tickers OR --tickers csv. Routes through
+      // POST /kalshi/markets/edge in a single call (vs. N serial Octagon
+      // round-trips). Use --refresh on a single ticker for the full deep
+      // analysis pipeline.
+      const csvTickers = args.tickers
+        ? args.tickers.split(',').map((s) => s.trim()).filter(Boolean)
+        : [];
+      const tickerList = [...args.positionalArgs, ...csvTickers];
+      if (tickerList.length > 1) {
+        const { handleAnalyzeBatch, formatAnalyzeBatchHuman } = await import('./analyze-batch.js');
+        const resp = await handleAnalyzeBatch(tickerList);
+        if (json) {
+          console.log(JSON.stringify(resp));
+        } else if (resp.ok) {
+          console.log(formatAnalyzeBatchHuman(resp.data));
+        } else {
+          console.error(resp.error?.message ?? 'analyze (batch) failed');
+        }
+        process.exit(resp.ok ? ExitCode.SUCCESS : ExitCode.USER_ERROR);
+        return;
+      }
       const ticker = args.positionalArgs[0];
       if (!ticker) {
         const errResp = wrapError('analyze', 'MISSING_TICKER', 'Usage: analyze <ticker> [--refresh] [--report]');
