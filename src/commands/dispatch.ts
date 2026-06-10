@@ -102,14 +102,14 @@ function modeFlagsFor(canonical: Subcommand, args: ParsedArgs): Record<string, s
  * this; `bun add -g` installs don't). Silenced after first emit by touching
  * a sentinel file under ~/.kalshi-bot/.
  */
-function maybeEmitBunxHint(args: ParsedArgs): void {
+async function maybeEmitBunxHint(args: ParsedArgs): Promise<void> {
   if (!args.json) return;
   if (process.stdout.isTTY) return;
   if (!process.env.BUN_INSTALL_CACHE_DIR) return;
   try {
-    // Lazy require to avoid import cycle at module init
-    const { appPath } = require('../utils/paths.js') as { appPath: (...p: string[]) => string };
-    const { existsSync, writeFileSync, mkdirSync } = require('fs') as typeof import('fs');
+    // Dynamic ESM imports to avoid pulling these into the module graph at init.
+    const { appPath } = await import('../utils/paths.js');
+    const { existsSync, writeFileSync, mkdirSync } = await import('fs');
     const sentinel = appPath('.bunx-hint-shown');
     if (existsSync(sentinel)) return;
     process.stderr.write(
@@ -126,19 +126,21 @@ function maybeEmitBunxHint(args: ParsedArgs): void {
   }
 }
 
+const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000;
+
 export async function dispatch(args: ParsedArgs): Promise<void> {
   // --days-to-close N is ergonomic sugar over --close-before <iso>. Resolve
   // it once here so every downstream command (search, events, series,
   // catalysts, basket --theme, similar) gets the same filter without each
   // handler reimplementing the arithmetic.
   if (args.daysToClose !== undefined && !args.closeBefore) {
-    const target = new Date(Date.now() + args.daysToClose * 86_400_000);
+    const target = new Date(Date.now() + args.daysToClose * MILLISECONDS_PER_DAY);
     args.closeBefore = target.toISOString();
   }
 
   const { subcommand, json } = args;
   const resolved = resolveAlias(subcommand, args.positionalArgs);
-  maybeEmitBunxHint(args);
+  await maybeEmitBunxHint(args);
   trackEvent('cli_command', {
     command: resolved.canonical,
     subview: resolved.subview ?? '',

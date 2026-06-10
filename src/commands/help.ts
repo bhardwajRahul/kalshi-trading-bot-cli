@@ -157,8 +157,8 @@ but has two gotchas under scripting:
   1. Bun's install chatter ("Resolving dependencies", "Saved lockfile") leaks
      into stdout before our CLI runs, corrupting JSON pipelines.
   2. Parallel \`bunx\` invocations race on the install cache and fail with
-     "Failed to link …: EEXIST" / "could not determine executable"
-     (oven-sh/bun#12917, still open as of Bun 1.3.14).
+     "Failed to link …: EEXIST" / "could not determine executable".
+     See oven-sh/bun#12917 for upstream status.
 
 **Recommended for scripts and agents:**
 

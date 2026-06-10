@@ -32,6 +32,15 @@ function fmtPct(v: number): string {
   return `${(v * 100).toFixed(1)}%`;
 }
 
+/**
+ * Render a possibly-null numeric value to a fixed-decimal string with an
+ * optional prefix/suffix. Returns "--" for null/undefined or non-finite
+ * (NaN/Infinity) values so we never render "NaNpp" or "Infinity%".
+ */
+function num(v: number | null | undefined, decimals: number, prefix = '', suffix = ''): string {
+  return v == null || !Number.isFinite(v) ? '--' : `${prefix}${v.toFixed(decimals)}${suffix}`;
+}
+
 function parseProbabilities(raw: string | undefined): Record<string, number> | undefined {
   if (!raw) return undefined;
   const map: Record<string, number> = {};
@@ -208,8 +217,6 @@ export function formatBasketBuildHuman(data: BasketBuildResponse): string {
   if (data.legs.length === 0) {
     lines.push('No legs selected.');
   } else {
-    const num = (v: number | null | undefined, decimals: number, prefix = '', suffix = '') =>
-      v == null ? '-' : `${prefix}${v.toFixed(decimals)}${suffix}`;
     const rows: string[][] = data.legs.map((l) => [
       l.market_ticker,
       truncate(l.title, 35),
@@ -427,14 +434,12 @@ export function formatBasketSizeHuman(data: BasketSizeResponse): string {
   const lines: string[] = [];
   lines.push(`Kelly sizing — $${data.bankroll_usd.toFixed(2)} bankroll, ${(data.kelly_multiplier * 100).toFixed(0)}% Kelly cap, total notional $${data.total_notional.toFixed(2)}`);
   lines.push('');
-  const num = (v: number | null | undefined, decimals: number, prefix = '', suffix = '') =>
-    v == null || !Number.isFinite(v) ? '--' : `${prefix}${v.toFixed(decimals)}${suffix}`;
   const rows: string[][] = data.legs.map((l) => [
     l.market_ticker,
     l.side.toUpperCase(),
     num(l.price, 2),
     num(l.model_probability != null ? l.model_probability * 100 : null, 1, '', '%'),
-    l.edge_pp == null ? '--' : `${l.edge_pp >= 0 ? '+' : ''}${l.edge_pp.toFixed(1)}pp`,
+    !Number.isFinite(l.edge_pp as number) ? '--' : `${(l.edge_pp as number) > 0 ? '+' : ''}${(l.edge_pp as number).toFixed(1)}pp`,
     num(l.kelly_fraction, 3),
     num(l.weight, 3),
     num(l.notional_usd, 2, '$'),

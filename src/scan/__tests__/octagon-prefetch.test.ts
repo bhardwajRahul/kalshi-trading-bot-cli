@@ -51,8 +51,8 @@ describe('persistEvent: per-outcome model_prob in edge_history', () => {
     }));
     const rows = db.query('SELECT ticker, model_prob, market_prob FROM edge_history ORDER BY ticker').all() as Array<{ ticker: string; model_prob: number; market_prob: number }>;
     expect(rows).toHaveLength(3);
-    const kw = rows.find((r) => r.ticker === 'KXFEDCHAIRNOM-29-KH');
-    expect(kw).toBeDefined();
+    const kh = rows.find((r) => r.ticker === 'KXFEDCHAIRNOM-29-KH');
+    expect(kh).toBeDefined();
     expect(rows.find((r) => r.ticker === 'KXFEDCHAIRNOM-29-KW')?.model_prob).toBeCloseTo(0.863, 3);
     expect(rows.find((r) => r.ticker === 'KXFEDCHAIRNOM-29-JS')?.model_prob).toBeCloseTo(0.038, 3);
     // None should be the event-level placeholder 0.921

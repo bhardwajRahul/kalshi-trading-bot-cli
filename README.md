@@ -371,7 +371,7 @@ The `bunx kalshi-trading-bot-cli@latest …` form is great for one-off interacti
 
 **1. Install chatter leaks into `--json` output.** Bun prints lines like `Resolving dependencies` and `Saved lockfile` to stdout *before* our CLI runs, which corrupts JSON pipelines.
 
-**2. Parallel invocations race on the install cache.** Running multiple `bunx kalshi-trading-bot-cli@latest …` calls in parallel can fail with `Failed to link …: EEXIST` and `could not determine executable` ([oven-sh/bun#12917](https://github.com/oven-sh/bun/issues/12917), still open as of Bun 1.3.14 — `bunx`'s ephemeral install path is not covered by the global-store fix that landed for `bun install`).
+**2. Parallel invocations race on the install cache.** Running multiple `bunx kalshi-trading-bot-cli@latest …` calls in parallel can fail with `Failed to link …: EEXIST` and `could not determine executable`. See [oven-sh/bun#12917](https://github.com/oven-sh/bun/issues/12917) for current upstream status — `bunx`'s ephemeral install path isn't covered by the `bun install` global-store fix, so the workarounds below are still the recommended path.
 
 **Recommended pattern for scripts and agents:**
 

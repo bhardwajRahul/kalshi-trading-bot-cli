@@ -75,7 +75,7 @@ export function formatAnalyzeBatchHuman(data: AnalyzeBatchResult): string {
     const status = r.status === 'scored' ? '✓' : '—';
     const modelStr = r.model_probability == null ? '-' : `${(r.model_probability * 100).toFixed(1)}%`;
     const marketStr = r.market_probability == null ? '-' : `${(r.market_probability * 100).toFixed(1)}%`;
-    const edgeStr = r.edge_pp == null ? '-' : `${r.edge_pp >= 0 ? '+' : ''}${r.edge_pp.toFixed(1)}pp`;
+    const edgeStr = r.edge_pp == null ? '-' : `${r.edge_pp > 0 ? '+' : ''}${r.edge_pp.toFixed(1)}pp`;
     const erStr = r.expected_return == null ? '-' : `${(r.expected_return * 100).toFixed(1)}%`;
     return [
       r.input_ticker,
