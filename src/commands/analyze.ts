@@ -29,6 +29,12 @@ export interface AnalyzeData {
   refreshedAt: string | null;
   /** Upstream Octagon model-run timestamp (Octagon's `analysis_last_updated`). */
   modelRunAt: string | null;
+  /**
+   * True when --refresh just ran but the upstream `analysis_last_updated`
+   * is unchanged from before the refresh. Tells the user we bumped the
+   * cache time but didn't get a newer underlying report from Octagon.
+   */
+  staleUpstream: boolean;
   modelProb: number;
   marketProb: number;
   edge: number;
@@ -170,6 +176,15 @@ export async function handleAnalyze(
   const invoker = createOctagonInvoker();
   const octagonClient = new OctagonClient(invoker, db, auditTrail);
   const edgeComputer = new EdgeComputer(db, auditTrail);
+
+  // Capture the upstream Octagon `analysis_last_updated` BEFORE the refresh
+  // so we can detect when --refresh re-fetches the same stale upstream
+  // report (cache fetch time bumped, but Octagon's underlying model run
+  // didn't move). This catches "stale upstream" cases where the user thinks
+  // they got fresh analysis but actually got the same body Octagon last
+  // generated weeks ago.
+  const preRefreshReport = refresh ? getLatestReport(db, resolvedTicker) : null;
+  const preRefreshAnalysis = preRefreshReport?.analysis_last_updated ?? null;
 
   // Use cache by default; only refresh when explicitly requested
   // Try prefetch first to avoid an individual Octagon API call
@@ -329,6 +344,15 @@ export async function handleAnalyze(
   const hasModel = !report.cacheMiss && Number.isFinite(snapshot.modelProb)
     && !(snapshot.modelProb === 0.5 && report.drivers.length === 0 && report.catalysts.length === 0);
 
+  // staleUpstream = user asked for --refresh but Octagon's upstream model run
+  // timestamp didn't move. Cache fetch time bumped, but the underlying report
+  // body is the same one Octagon previously generated. The user wanted fresh
+  // analysis; they got an unchanged stale one.
+  const staleUpstream = refresh
+    && preRefreshAnalysis != null
+    && latestDbReport?.analysis_last_updated != null
+    && preRefreshAnalysis === latestDbReport.analysis_last_updated;
+
   return {
     ticker: resolvedTicker,
     eventTicker,
@@ -336,6 +360,7 @@ export async function handleAnalyze(
     expirationTime: market.expiration_time || market.expected_expiration_time || market.close_time || null,
     refreshedAt,
     modelRunAt,
+    staleUpstream,
     hasModel,
     modelProb: snapshot.modelProb,
     marketProb,
@@ -463,27 +488,36 @@ export function formatAnalyzeHuman(data: AnalyzeData): string {
     }
   }
 
-  // Two distinct timestamps — keeping them labeled and explicit because users
-  // (and downstream bots) were confused about which one indicates freshness.
+  // Two distinct timestamps — labeled with the wording users actually use:
   //
-  //   Refreshed = when WE pulled this report from Octagon. This is the
-  //               freshness indicator. `analyze … --refresh` bumps this.
-  //   Model run = when OCTAGON's model last scored this event. Independent
-  //               of our cache; bumps when Octagon re-runs their analysis.
+  //   Cache refreshed at    = when the bot last fetched/re-read the Octagon
+  //                           payload. This is what bumps on --refresh.
+  //   Report body updated at = the upstream Octagon `analysis_last_updated`
+  //                            (matches the "Updated: …" date embedded in the
+  //                            report body text). Doesn't change unless
+  //                            Octagon re-runs their analysis upstream.
   //
-  // If you're a bot/agent reading this output: use **Refreshed** to decide
-  // whether to call --refresh. Model run is purely informational.
+  // If you're a bot/agent reading this output: use **Report body updated at**
+  // to decide whether the underlying analysis is fresh. The Cache refreshed
+  // at time only tells you when we last re-pulled the same body — it can be
+  // recent while the report itself is weeks old.
   lines.push('');
   if (data.refreshedAt) {
     const ageSuffix = data.reportAge ? ` (${data.reportAge})` : '';
-    lines.push(`  Refreshed:   ${data.refreshedAt}${ageSuffix}   ← our local fetch time; bumps on --refresh`);
+    lines.push(`  Cache refreshed at:    ${data.refreshedAt}${ageSuffix}`);
+    lines.push(`                         ↳ when the bot last fetched the Octagon payload; bumps on --refresh`);
   }
   if (data.modelRunAt) {
-    lines.push(`  Model run:   ${data.modelRunAt}   ← upstream Octagon analysis_last_updated`);
+    lines.push(`  Report body updated at: ${data.modelRunAt}`);
+    lines.push(`                         ↳ when Octagon last ran the model upstream (the "Updated:" date inside the report)`);
   }
-  if (data.fromCache && data.reportAge) {
-    lines.push(`  Data: cached. Run \`analyze ${data.ticker} --refresh\` for the latest report (costs 3 credits).`);
-  } else if (data.fromCache) {
+  if (data.staleUpstream) {
+    lines.push('');
+    lines.push(`  ⚠ --refresh pulled the same Octagon report body. The cache fetch time bumped,`);
+    lines.push(`    but Octagon's upstream analysis hasn't been re-run since ${data.modelRunAt ?? 'an earlier date'}.`);
+    lines.push(`    Treat this as a stale upstream report — no newer analysis is available.`);
+  }
+  if (data.fromCache) {
     lines.push(`  Data: cached. Run \`analyze ${data.ticker} --refresh\` for the latest report (costs 3 credits).`);
   } else {
     lines.push('  Data: freshly generated.');

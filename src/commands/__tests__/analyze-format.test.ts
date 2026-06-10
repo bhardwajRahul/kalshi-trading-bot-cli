@@ -9,6 +9,7 @@ function base(overrides: Partial<AnalyzeData>): AnalyzeData {
     expirationTime: null,
     refreshedAt: '2026-06-10 12:00 UTC',
     modelRunAt: '2026-06-09 18:30 UTC',
+    staleUpstream: false,
     hasModel: true,
     modelProb: 0.72,
     marketProb: 0.58,
@@ -60,26 +61,45 @@ describe('formatAnalyzeHuman — model coverage display', () => {
 });
 
 describe('formatAnalyzeHuman — date label clarity', () => {
-  test('shows Refreshed and Model run as two distinct, labeled lines', () => {
+  test('shows Cache refreshed and Report body updated as two distinct, labeled lines', () => {
     const out = formatAnalyzeHuman(base({
       refreshedAt: '2026-06-10 12:00 UTC',
       modelRunAt: '2026-06-09 18:30 UTC',
     }));
-    expect(out).toContain('Refreshed:   2026-06-10 12:00 UTC');
-    expect(out).toContain('our local fetch time');
-    expect(out).toContain('Model run:   2026-06-09 18:30 UTC');
-    expect(out).toContain('upstream Octagon');
+    expect(out).toContain('Cache refreshed at:    2026-06-10 12:00 UTC');
+    expect(out).toContain('Report body updated at: 2026-06-09 18:30 UTC');
+    expect(out).toContain('when the bot last fetched the Octagon payload');
+    expect(out).toContain('when Octagon last ran the model upstream');
   });
 
-  test('omits Model run line when upstream timestamp is missing', () => {
+  test('omits Report body line when upstream timestamp is missing', () => {
     const out = formatAnalyzeHuman(base({ modelRunAt: null }));
-    expect(out).toContain('Refreshed:');
-    expect(out).not.toContain('Model run:');
+    expect(out).toContain('Cache refreshed at:');
+    expect(out).not.toContain('Report body updated at:');
   });
 
-  test('hint says Refreshed is the freshness indicator', () => {
+  test('explains that --refresh bumps Cache refreshed at', () => {
     const out = formatAnalyzeHuman(base({ fromCache: true }));
-    // Refreshed line includes the explanatory caption
     expect(out).toContain('bumps on --refresh');
+  });
+});
+
+describe('formatAnalyzeHuman — stale upstream warning', () => {
+  test('warns when --refresh did not get a newer upstream analysis', () => {
+    const out = formatAnalyzeHuman(base({
+      staleUpstream: true,
+      refreshedAt: '2026-06-10 21:15 UTC',
+      modelRunAt: '2026-04-13 00:13 UTC',
+    }));
+    expect(out).toContain('--refresh pulled the same Octagon report body');
+    expect(out).toContain('upstream analysis hasn');  // straight quote in test; em-dash and apostrophe variants both possible
+    expect(out).toContain('2026-04-13 00:13 UTC');
+    expect(out).toContain('stale upstream report');
+  });
+
+  test('no warning on normal cache hit', () => {
+    const out = formatAnalyzeHuman(base({ staleUpstream: false }));
+    expect(out).not.toContain('stale upstream');
+    expect(out).not.toContain('pulled the same');
   });
 });
