@@ -35,12 +35,25 @@ export interface AnalyzeData {
    * cache time but didn't get a newer underlying report from Octagon.
    */
   staleUpstream: boolean;
-  modelProb: number;
-  marketProb: number;
-  edge: number;
-  edgePp: string;
-  confidence: string;
-  mispricingSignal: string;
+  /**
+   * Octagon's model probability for this market. null when hasModel is
+   * false — we deliberately do NOT emit the 0.5 placeholder fallback to
+   * JSON consumers. Always check hasModel before reading this field.
+   */
+  modelProb: number | null;
+  /**
+   * Last traded market probability. null when hasMarketPrice is false.
+   * Always check hasMarketPrice before reading.
+   */
+  marketProb: number | null;
+  /** modelProb − marketProb. null when either input is unavailable. */
+  edge: number | null;
+  /** Pretty-printed edge ("+14pp"). null when edge is null. */
+  edgePp: string | null;
+  /** "very_high" | "high" | "moderate" | "low" — null when edge is null. */
+  confidence: string | null;
+  /** "underpriced" | "overpriced" | "fair_value" — null when edge is null. */
+  mispricingSignal: string | null;
   signal: string;
   drivers: PriceDriver[];
   catalysts: Catalyst[];
@@ -228,6 +241,16 @@ export async function handleAnalyze(
   const latestDbReport = getLatestReport(db, resolvedTicker);
   const reportAge = latestDbReport ? formatAge(latestDbReport.fetched_at) : null;
 
+  // Decide trading-side gating BEFORE running edge / Kelly / signal math.
+  // hasModel uses report.modelProb directly (snapshot.modelProb is just
+  // propagated unchanged from computeEdge — verified in edge-computer.ts:38).
+  // canComputeEdge is the contract: any trading decision (signal, Kelly,
+  // mispricing) must check it first. Otherwise we'd build a "BUY YES @ $X"
+  // recommendation from a 0.5 placeholder modelProb on uncovered events.
+  const hasModel = !report.cacheMiss && Number.isFinite(report.modelProb)
+    && !(report.modelProb === 0.5 && report.drivers.length === 0 && report.catalysts.length === 0);
+  const canComputeEdge = hasModel && hasMarketPrice;
+
   const snapshot = edgeComputer.computeEdge(resolvedTicker, report, marketProb);
 
   // Persist edge
@@ -264,7 +287,9 @@ export async function handleAnalyze(
     liquidityAdjusted: false,
   };
   let kelly: KellyResult;
-  if (!hasMarketPrice) {
+  if (!canComputeEdge) {
+    // Either no model coverage or no last_price → any sizing computed from
+    // a placeholder modelProb / marketProb would be meaningless.
     kelly = emptyKelly;
   } else {
     try {
@@ -316,9 +341,16 @@ export async function handleAnalyze(
   const entryPrice = (snapshot.edge > 0 ? yesAsk : noAsk);
 
   let signal: string;
-  if (!hasMarketPrice) {
-    // No tradeable price — no actionable signal. Render explicitly.
-    signal = 'no signal (market has no last traded price)';
+  if (!canComputeEdge) {
+    // Any actionable signal needs both a real model probability and a real
+    // last_price. Spell out which one is missing so the user / bot knows
+    // why we're not making a recommendation.
+    const reason = !hasModel && !hasMarketPrice
+      ? 'no Octagon model coverage and no last traded price'
+      : !hasModel
+        ? 'no Octagon model coverage for this market'
+        : 'market has no last traded price';
+    signal = `no signal (${reason})`;
   } else if (existingPosition) {
     const holdDir = existingPosition.direction.toUpperCase();
     const edgeReversed =
@@ -365,11 +397,9 @@ export async function handleAnalyze(
     ? latestDbReport.analysis_last_updated.replace('T', ' ').slice(0, 16) + ' UTC'
     : null;
 
-  // hasModel = Octagon returned a real probability for this market. A
-  // cache-miss report keeps modelProb at the 0.5 placeholder; we must NOT
-  // render that as if it were a real prediction.
-  const hasModel = !report.cacheMiss && Number.isFinite(snapshot.modelProb)
-    && !(snapshot.modelProb === 0.5 && report.drivers.length === 0 && report.catalysts.length === 0);
+  // hasModel + canComputeEdge were computed earlier (above Kelly/signal),
+  // so trading-side math never reads a placeholder edge. See top of
+  // handleAnalyze for the contract.
 
   // staleUpstream = user asked for --refresh but Octagon's upstream model run
   // timestamp didn't move. Cache fetch time bumped, but the underlying report
@@ -380,6 +410,11 @@ export async function handleAnalyze(
     && latestDbReport?.analysis_last_updated != null
     && preRefreshAnalysis === latestDbReport.analysis_last_updated;
 
+  // Null out trading-side fields when the underlying inputs are unavailable.
+  // JSON consumers previously saw modelProb: 0.5 / marketProb: 0.5 / edge: 0
+  // on degraded paths and treated them as real predictions. The hasModel and
+  // hasMarketPrice flags are the source of truth — fields here mirror them.
+  // (canComputeEdge was already evaluated at the top of the function.)
   return {
     ticker: resolvedTicker,
     eventTicker,
@@ -390,12 +425,12 @@ export async function handleAnalyze(
     staleUpstream,
     hasModel,
     hasMarketPrice,
-    modelProb: snapshot.modelProb,
-    marketProb,
-    edge: snapshot.edge,
-    edgePp,
-    confidence: snapshot.confidence,
-    mispricingSignal,
+    modelProb: hasModel ? snapshot.modelProb : null,
+    marketProb: hasMarketPrice ? marketProb : null,
+    edge: canComputeEdge ? snapshot.edge : null,
+    edgePp: canComputeEdge ? edgePp : null,
+    confidence: canComputeEdge ? snapshot.confidence : null,
+    mispricingSignal: canComputeEdge ? mispricingSignal : null,
     signal,
     drivers: snapshot.drivers,
     catalysts: snapshot.catalysts,
@@ -437,17 +472,17 @@ export function formatAnalyzeHuman(data: AnalyzeData): string {
   //   hasMarketPrice=false → Kalshi market has no last_price → Market Prob shows "--"
   // Edge needs both. Either being false means edge/confidence/mispricing
   // render "--" — we never show a number derived from a placeholder.
-  const modelStr = data.hasModel
+  const modelStr = data.hasModel && data.modelProb != null
     ? `${(data.modelProb * 100).toFixed(1)}%`
     : `--   (no Octagon model coverage for this market)`;
-  const marketStr = data.hasMarketPrice
+  const marketStr = data.hasMarketPrice && data.marketProb != null
     ? `${(data.marketProb * 100).toFixed(1)}%`
     : `--   (no last traded price — market hasn't traded yet)`;
-  const canComputeEdge = data.hasModel && data.hasMarketPrice;
+  const canComputeEdge = data.hasModel && data.hasMarketPrice && data.edge != null;
   lines.push(`  Model Prob:  ${modelStr}`);
   lines.push(`  Market Prob: ${marketStr}`);
   if (canComputeEdge) {
-    lines.push(`  Edge:        ${data.edgePp} (${(data.edge * 100).toFixed(1)}%)`);
+    lines.push(`  Edge:        ${data.edgePp} (${(data.edge! * 100).toFixed(1)}%)`);
     lines.push(`  Confidence:  ${data.confidence}`);
     lines.push(`  Mispricing:  ${data.mispricingSignal}`);
   } else {
@@ -624,8 +659,12 @@ export async function promptAnalyzeActions(data: AnalyzeData): Promise<void> {
           // Close position: sell what we hold
           const sellSide = data.existingPosition.direction;
           const sellSize = data.existingPosition.size;
+          // marketProb is guaranteed when isSell is reachable (we got a SELL
+          // recommendation, which requires a price), but type system can't
+          // see that — fall back to 50 if data was tampered with.
+          const mp = data.marketProb ?? 0.5;
           const closePrice = data.closePriceCents ?? Math.round(
-            (sellSide === 'yes' ? data.marketProb : 1 - data.marketProb) * 100
+            (sellSide === 'yes' ? mp : 1 - mp) * 100
           );
 
           console.log(`  Signal: SELL ${sellSize} ${sellSide.toUpperCase()} @ ${closePrice}¢ (close position)`);
@@ -701,7 +740,7 @@ export async function promptAnalyzeActions(data: AnalyzeData): Promise<void> {
           break;
         }
 
-        const side = data.edge > 0 ? 'yes' : 'no';
+        const side = (data.edge ?? 0) > 0 ? 'yes' : 'no';
         const price = data.kelly.entryPriceCents;
         console.log(`  Signal: BUY ${data.kelly.contracts} ${side.toUpperCase()} @ ${price}¢`);
         const confirm = await ask('  Execute? [y/n] ');
