@@ -116,11 +116,42 @@ function getVolume(m: KalshiMarket): number {
 }
 
 /**
+ * Normalize user input into a canonical Kalshi ticker.
+ *
+ * Accepts any of:
+ *   - Bare ticker, any case: `kxmeasles-26`, `KXMEASLES-26`, `KxMeAsLeS-26`
+ *   - Kalshi URL: `https://kalshi.com/markets/kxmeasles/measles-cases/kxmeasles-26`
+ *   - URL without protocol: `kalshi.com/markets/kxmeasles-26`
+ *   - URL with query / fragment: `…/kxmeasles-26?ref=foo#yes`
+ *
+ * Strategy: detect URL-shaped input, extract the last non-empty path segment
+ * (which by Kalshi convention is the ticker), then uppercase. Bare tickers
+ * are simply uppercased. Kalshi's path is case-sensitive — without this
+ * `/markets/kxmeasles-26` 404s even though the ticker exists.
+ */
+export function normalizeKalshiInput(input: string): string {
+  const trimmed = input.trim();
+  const looksLikeUrl =
+    /^https?:\/\//i.test(trimmed) || /^(www\.)?kalshi\.com\//i.test(trimmed);
+  if (looksLikeUrl) {
+    const noProto = trimmed
+      .replace(/^https?:\/\/[^/]+/i, '')
+      .replace(/^(www\.)?kalshi\.com/i, '');
+    const path = noProto.replace(/[?#].*$/, '').replace(/\/+$/, '');
+    const segments = path.split('/').filter(Boolean);
+    const last = segments[segments.length - 1] ?? '';
+    if (last) return last.toUpperCase();
+  }
+  return trimmed.toUpperCase();
+}
+
+/**
  * Resolve a user-provided ticker to a market ticker.
- * Accepts: market ticker, event ticker, or series ticker.
+ * Accepts: market ticker, event ticker, series ticker, or Kalshi URL.
  * Returns the resolved KalshiMarket (picking the most active open market for events/series).
  */
-export async function resolveMarket(input: string): Promise<KalshiMarket> {
+export async function resolveMarket(rawInput: string): Promise<KalshiMarket> {
+  const input = normalizeKalshiInput(rawInput);
   // 1. Try as a market ticker first
   try {
     const res = await callKalshiApi('GET', `/markets/${input}`);
@@ -178,7 +209,7 @@ export async function resolveMarket(input: string): Promise<KalshiMarket> {
     if (!(err instanceof KalshiApiError && err.statusCode === 404)) throw err;
   }
 
-  throw new Error(`Could not find a market for "${input}". Try a full market ticker (e.g. KXBTC-26MAR14-T50049), event ticker (e.g. KXBTC-26MAR14), or series ticker (e.g. KXBTC).`);
+  throw new Error(`Could not find a market for "${rawInput}" (normalized to "${input}"). Try a market ticker (e.g. KXBTC-26MAR14-T50049), event ticker (e.g. KXBTC-26MAR14), series ticker (e.g. KXBTC), or a Kalshi URL like https://kalshi.com/markets/<series>/<slug>/<event>.`);
 }
 
 export async function handleAnalyze(
