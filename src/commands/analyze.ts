@@ -241,6 +241,16 @@ export async function handleAnalyze(
   const latestDbReport = getLatestReport(db, resolvedTicker);
   const reportAge = latestDbReport ? formatAge(latestDbReport.fetched_at) : null;
 
+  // Decide trading-side gating BEFORE running edge / Kelly / signal math.
+  // hasModel uses report.modelProb directly (snapshot.modelProb is just
+  // propagated unchanged from computeEdge — verified in edge-computer.ts:38).
+  // canComputeEdge is the contract: any trading decision (signal, Kelly,
+  // mispricing) must check it first. Otherwise we'd build a "BUY YES @ $X"
+  // recommendation from a 0.5 placeholder modelProb on uncovered events.
+  const hasModel = !report.cacheMiss && Number.isFinite(report.modelProb)
+    && !(report.modelProb === 0.5 && report.drivers.length === 0 && report.catalysts.length === 0);
+  const canComputeEdge = hasModel && hasMarketPrice;
+
   const snapshot = edgeComputer.computeEdge(resolvedTicker, report, marketProb);
 
   // Persist edge
@@ -277,7 +287,9 @@ export async function handleAnalyze(
     liquidityAdjusted: false,
   };
   let kelly: KellyResult;
-  if (!hasMarketPrice) {
+  if (!canComputeEdge) {
+    // Either no model coverage or no last_price → any sizing computed from
+    // a placeholder modelProb / marketProb would be meaningless.
     kelly = emptyKelly;
   } else {
     try {
@@ -329,9 +341,16 @@ export async function handleAnalyze(
   const entryPrice = (snapshot.edge > 0 ? yesAsk : noAsk);
 
   let signal: string;
-  if (!hasMarketPrice) {
-    // No tradeable price — no actionable signal. Render explicitly.
-    signal = 'no signal (market has no last traded price)';
+  if (!canComputeEdge) {
+    // Any actionable signal needs both a real model probability and a real
+    // last_price. Spell out which one is missing so the user / bot knows
+    // why we're not making a recommendation.
+    const reason = !hasModel && !hasMarketPrice
+      ? 'no Octagon model coverage and no last traded price'
+      : !hasModel
+        ? 'no Octagon model coverage for this market'
+        : 'market has no last traded price';
+    signal = `no signal (${reason})`;
   } else if (existingPosition) {
     const holdDir = existingPosition.direction.toUpperCase();
     const edgeReversed =
@@ -378,11 +397,9 @@ export async function handleAnalyze(
     ? latestDbReport.analysis_last_updated.replace('T', ' ').slice(0, 16) + ' UTC'
     : null;
 
-  // hasModel = Octagon returned a real probability for this market. A
-  // cache-miss report keeps modelProb at the 0.5 placeholder; we must NOT
-  // render that as if it were a real prediction.
-  const hasModel = !report.cacheMiss && Number.isFinite(snapshot.modelProb)
-    && !(snapshot.modelProb === 0.5 && report.drivers.length === 0 && report.catalysts.length === 0);
+  // hasModel + canComputeEdge were computed earlier (above Kelly/signal),
+  // so trading-side math never reads a placeholder edge. See top of
+  // handleAnalyze for the contract.
 
   // staleUpstream = user asked for --refresh but Octagon's upstream model run
   // timestamp didn't move. Cache fetch time bumped, but the underlying report
@@ -397,7 +414,7 @@ export async function handleAnalyze(
   // JSON consumers previously saw modelProb: 0.5 / marketProb: 0.5 / edge: 0
   // on degraded paths and treated them as real predictions. The hasModel and
   // hasMarketPrice flags are the source of truth — fields here mirror them.
-  const canComputeEdge = hasModel && hasMarketPrice;
+  // (canComputeEdge was already evaluated at the top of the function.)
   return {
     ticker: resolvedTicker,
     eventTicker,

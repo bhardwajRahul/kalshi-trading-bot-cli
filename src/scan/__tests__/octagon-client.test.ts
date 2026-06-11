@@ -191,6 +191,22 @@ describe('OctagonClient', () => {
       expect(report.marketProb).toBeCloseTo(0.29, 3);
     });
 
+    test('parses sub-1% values correctly (regression: parsePercent heuristic)', () => {
+      // "0.9%" was being read as 0.9 (=90%) by the n>1?n/100:n heuristic
+      // because parseFloat("0.9%") didn't honor the % marker. The fix is to
+      // check for an explicit % sign in the input and always divide by 100
+      // when present.
+      const markdown = [
+        '| Player        | Market % | Model % |',
+        '|---------------|----------|---------|',
+        '| Dark Horse    | 0.9%     | 1%      |',
+      ].join('\n');
+      const client = new OctagonClient(makeInvoker(''), db, audit);
+      const report = client.parseReport(markdown, 'KX-EVENT-DARKHORSE', 'KX-EVENT', 'cache');
+      expect(report.modelProb).toBeCloseTo(0.01, 4);   // "1%" → 0.01, not 1.0
+      expect(report.marketProb).toBeCloseTo(0.009, 4); // "0.9%" → 0.009, not 0.9
+    });
+
     test('table parser falls back to defaults when no row matches', () => {
       const markdown = [
         '| Player        | Market % | Model % |',

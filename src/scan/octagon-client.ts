@@ -492,9 +492,16 @@ export class OctagonClient {
       line.split('|').slice(1, -1).map((c) => c.trim());
     const isPercent = (s: string): boolean => /^-?\d+(\.\d+)?%?$/.test(s.replace(/[,$]/g, ''));
     const parsePercent = (s: string): number | null => {
+      // Honor an explicit % marker in the input — "0.9%" must be 0.009, not
+      // 0.9, and "1%" must be 0.01. The legacy `n > 1 ? n/100 : n` heuristic
+      // only works when the value is unambiguously > 1 (e.g. "35%") and
+      // misreads sub-1 percentages. We only fall back to the heuristic when
+      // there's no % sign at all (raw fractions like "0.35").
+      const hasPercentSign = s.includes('%');
       const cleaned = s.replace(/[%,$\s]/g, '');
       const n = parseFloat(cleaned);
       if (!Number.isFinite(n)) return null;
+      if (hasPercentSign) return n / 100;
       return n > 1 ? n / 100 : n;
     };
 
