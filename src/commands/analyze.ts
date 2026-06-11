@@ -421,11 +421,37 @@ export async function handleAnalyze(
   //                 This is the "Refreshed" date — what bumps when --refresh runs.
   //   modelRunAt  = Octagon's analysis_last_updated (when their model last
   //                 scored this event). Independent of our cache.
-  const refreshedAt = latestDbReport
-    ? new Date(latestDbReport.fetched_at * 1000).toISOString().replace('T', ' ').slice(0, 16) + ' UTC'
+  //
+  // The prefetch path persists rows keyed by event_ticker (variant_used =
+  // 'events-api') and carries analysis_last_updated. The on-demand fetchReport
+  // path persists rows keyed by market_ticker but does NOT carry
+  // analysis_last_updated (the per-market cache API doesn't expose it). So
+  // when resolveMarket picks a child contract from an event ladder, the
+  // ticker-keyed lookup finds a fetchReport row with analysis_last_updated =
+  // null — even though Octagon has a fresh prefetched timestamp at the
+  // event level. Fall back to the event-keyed prefetch row to surface it.
+  // When the resolved ticker is a child market with no fetchReport row of its
+  // own (e.g. the report was served directly from a prefetched event-level
+  // row), look up the event-keyed prefetch row for both timestamps so
+  // refreshedAt and modelRunAt aren't null on every prefetch-cache-hit.
+  let fetchedAtEpoch = latestDbReport?.fetched_at ?? null;
+  let analysisLastUpdated = latestDbReport?.analysis_last_updated ?? null;
+  if ((!fetchedAtEpoch || !analysisLastUpdated) && eventTicker && eventTicker !== resolvedTicker) {
+    const eventRow = db.query(
+      `SELECT fetched_at, analysis_last_updated FROM octagon_reports
+       WHERE event_ticker = $et AND variant_used = 'events-api'
+       ORDER BY fetched_at DESC LIMIT 1`,
+    ).get({ $et: eventTicker }) as { fetched_at: number; analysis_last_updated: string | null } | undefined;
+    if (eventRow) {
+      fetchedAtEpoch = fetchedAtEpoch ?? eventRow.fetched_at;
+      analysisLastUpdated = analysisLastUpdated ?? eventRow.analysis_last_updated;
+    }
+  }
+  const refreshedAt = fetchedAtEpoch
+    ? new Date(fetchedAtEpoch * 1000).toISOString().replace('T', ' ').slice(0, 16) + ' UTC'
     : null;
-  const modelRunAt = latestDbReport?.analysis_last_updated
-    ? latestDbReport.analysis_last_updated.replace('T', ' ').slice(0, 16) + ' UTC'
+  const modelRunAt = analysisLastUpdated
+    ? analysisLastUpdated.replace('T', ' ').slice(0, 16) + ' UTC'
     : null;
 
   // hasModel + canComputeEdge were computed earlier (above Kelly/signal),
