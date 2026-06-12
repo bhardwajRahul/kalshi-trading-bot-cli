@@ -100,3 +100,34 @@ describe('computeBaselines — null strategies on the same universe', () => {
     expect(m.baselines.within_band_breakdown).toEqual([]);
   });
 });
+
+describe('LegMetrics — resolved vs unresolved split (Issue 3)', () => {
+  test('resolved_metrics covers only resolved signals; unresolved_metrics only unresolved', () => {
+    const sigs: ScoredSignal[] = [
+      // Two resolved NO winners — same as before
+      signal({ market_ticker: 'A', resolved: true,  market_then: 30, market_now: 0,  edge_pp: -10, pnl: 0.3,  capital: 0.7 }),
+      signal({ market_ticker: 'B', resolved: true,  market_then: 25, market_now: 0,  edge_pp: -8,  pnl: 0.25, capital: 0.75 }),
+      // One unresolved that drifted the wrong way
+      signal({ market_ticker: 'C', resolved: false, market_then: 50, market_now: 30, edge_pp: 5,   pnl: -0.20, capital: 0.5 }),
+    ];
+    const m = computeMetrics(sigs);
+    expect(m.resolved_metrics.edge_signals).toBe(2);
+    expect(m.unresolved_metrics.edge_signals).toBe(1);
+    // Resolved ROI = (0.3 + 0.25) / (0.7 + 0.75) ≈ +37.9%
+    expect(m.resolved_metrics.flat_bet_roi).toBeCloseTo(0.55 / 1.45, 3);
+    // Unresolved is a loser
+    expect(m.unresolved_metrics.flat_bet_roi).toBeLessThan(0);
+    // Top-level fields still carry the blended view (backward compat)
+    expect(m.edge_signals).toBe(3);
+  });
+
+  test('all-resolved input yields empty unresolved_metrics', () => {
+    const sigs: ScoredSignal[] = [
+      signal({ market_ticker: 'A', resolved: true, market_then: 30, market_now: 0, edge_pp: -10, pnl: 0.3, capital: 0.7 }),
+    ];
+    const m = computeMetrics(sigs);
+    expect(m.resolved_metrics.edge_signals).toBe(1);
+    expect(m.unresolved_metrics.edge_signals).toBe(0);
+    expect(m.unresolved_metrics.total_capital).toBe(0);
+  });
+});

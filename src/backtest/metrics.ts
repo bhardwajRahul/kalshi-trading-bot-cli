@@ -1,4 +1,4 @@
-import type { ScoredSignal, BacktestResult } from './types.js';
+import type { ScoredSignal, BacktestResult, LegMetrics } from './types.js';
 
 /**
  * Skill score: how much better Octagon is vs the market as a forecaster.
@@ -150,6 +150,46 @@ function computeBaselines(signals: ScoredSignal[]): BacktestResult['baselines'] 
   };
 }
 
+/**
+ * Compute the scorecard for one leg (resolved-only or unresolved-only).
+ * Same hit-rate and capital-weighted ROI definitions as the blended
+ * computation, just scoped to the subset.
+ */
+function computeLegMetrics(signals: ScoredSignal[], minEdgePp: number): LegMetrics {
+  const edgeSignals = signals.filter((s) => s.edge_pp !== 0 && Math.abs(s.edge_pp) >= minEdgePp);
+  const edgeCount = edgeSignals.length;
+  const hits = edgeSignals.filter((s) =>
+    s.edge_pp > 0 ? s.market_now > s.market_then : s.market_now < s.market_then,
+  );
+  const hitRate = edgeCount > 0 ? hits.length / edgeCount : 0;
+  const hitRateData = edgeSignals.map((s) =>
+    s.edge_pp > 0 ? (s.market_now > s.market_then ? 1 : 0) : (s.market_now < s.market_then ? 1 : 0),
+  );
+  const hitRateCI: [number, number] = edgeCount > 0
+    ? bootstrapCI(hitRateData, (sample) => sample.reduce((a, b) => a + b, 0) / sample.length)
+    : [0, 0];
+  const pnl = edgeSignals.reduce((sum, s) => sum + s.pnl, 0);
+  const totalCapital = edgeSignals.reduce((sum, s) => sum + s.capital, 0);
+  const roi = totalCapital > 0 ? pnl / totalCapital : 0;
+  return {
+    edge_signals: edgeCount,
+    edge_hit_rate: hitRate,
+    hit_rate_ci: hitRateCI,
+    flat_bet_pnl: pnl,
+    flat_bet_roi: roi,
+    total_capital: totalCapital,
+  };
+}
+
+const EMPTY_LEG: LegMetrics = {
+  edge_signals: 0,
+  edge_hit_rate: 0,
+  hit_rate_ci: [0, 0],
+  flat_bet_pnl: 0,
+  flat_bet_roi: 0,
+  total_capital: 0,
+};
+
 const EMPTY_BASELINES: BacktestResult['baselines'] = {
   always_no_roi: 0,
   always_no_hit_rate: 0,
@@ -183,6 +223,8 @@ export function computeMetrics(signals: ScoredSignal[], minEdgePp = 0.5): Omit<B
       total_capital: 0,
       signals: [],
       baselines: EMPTY_BASELINES,
+      resolved_metrics: EMPTY_LEG,
+      unresolved_metrics: EMPTY_LEG,
     };
   }
 
@@ -270,5 +312,7 @@ export function computeMetrics(signals: ScoredSignal[], minEdgePp = 0.5): Omit<B
     total_capital: totalCapital,
     signals,
     baselines: computeBaselines(signals),
+    resolved_metrics: computeLegMetrics(signals.filter((s) => s.resolved), minEdgePp),
+    unresolved_metrics: computeLegMetrics(signals.filter((s) => !s.resolved), minEdgePp),
   };
 }

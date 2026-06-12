@@ -57,9 +57,33 @@ export function formatBacktestHuman(result: BacktestResult, opts?: FormatOpts): 
   // lines.push('');
   lines.push(`  Edge signals      ${result.edge_signals}   (min edge: ${minEdgePp}pp)`);
   if (result.edge_signals > 0) {
-    lines.push(`  Hit rate          ${(result.edge_hit_rate * 100).toFixed(1)}%  [95% CI: ${(result.hit_rate_ci[0] * 100).toFixed(1)}% to ${(result.hit_rate_ci[1] * 100).toFixed(1)}%]`);
-    lines.push(`  Flat-bet P&L      ${result.flat_bet_pnl >= 0 ? '+' : ''}$${result.flat_bet_pnl.toFixed(2)} (ROI: ${result.flat_bet_roi >= 0 ? '+' : ''}${(result.flat_bet_roi * 100).toFixed(1)}%)`);
-    lines.push(`  Capital deployed  $${result.total_capital.toFixed(2)}   (capital-weighted ROI)`);
+    // Resolved settles at 0/100 — realized. Unresolved is marked to the
+    // current Kalshi price — paper P&L that can reverse. Splitting them
+    // makes it visible when one leg is carrying a weak other.
+    const r = result.resolved_metrics;
+    const u = result.unresolved_metrics;
+    if (r.edge_signals > 0) {
+      lines.push('');
+      lines.push('  RESOLVED (realized P&L)');
+      lines.push(`    Hit rate        ${(r.edge_hit_rate * 100).toFixed(1)}%  [95% CI: ${(r.hit_rate_ci[0] * 100).toFixed(1)}% to ${(r.hit_rate_ci[1] * 100).toFixed(1)}%]   n=${r.edge_signals}`);
+      lines.push(`    Flat-bet P&L    ${fmtRoi(r.flat_bet_roi)} ROI  (${r.flat_bet_pnl >= 0 ? '+' : ''}$${r.flat_bet_pnl.toFixed(2)} on $${r.total_capital.toFixed(2)} capital)`);
+    }
+    if (u.edge_signals > 0) {
+      lines.push('');
+      lines.push('  UNRESOLVED (mark-to-market — paper P&L)');
+      lines.push(`    Directional drift ${(u.edge_hit_rate * 100).toFixed(1)}%  [95% CI: ${(u.hit_rate_ci[0] * 100).toFixed(1)}% to ${(u.hit_rate_ci[1] * 100).toFixed(1)}%]   n=${u.edge_signals}`);
+      lines.push(`    M2M P&L         ${fmtRoi(u.flat_bet_roi)} ROI  (${u.flat_bet_pnl >= 0 ? '+' : ''}$${u.flat_bet_pnl.toFixed(2)} on $${u.total_capital.toFixed(2)} capital)`);
+    }
+    if (r.edge_signals > 0 && u.edge_signals > 0) {
+      lines.push('');
+      lines.push('  COMBINED (both legs blended — interpret with care)');
+      lines.push(`    Hit rate        ${(result.edge_hit_rate * 100).toFixed(1)}%  [95% CI: ${(result.hit_rate_ci[0] * 100).toFixed(1)}% to ${(result.hit_rate_ci[1] * 100).toFixed(1)}%]`);
+      lines.push(`    Flat-bet P&L    ${fmtRoi(result.flat_bet_roi)} ROI  (${result.flat_bet_pnl >= 0 ? '+' : ''}$${result.flat_bet_pnl.toFixed(2)} on $${result.total_capital.toFixed(2)} capital)`);
+    } else if (r.edge_signals === 0 && u.edge_signals === 0) {
+      // No edge signals on either leg — fall back to the old single-line view.
+      lines.push(`  Hit rate          ${(result.edge_hit_rate * 100).toFixed(1)}%  [95% CI: ${(result.hit_rate_ci[0] * 100).toFixed(1)}% to ${(result.hit_rate_ci[1] * 100).toFixed(1)}%]`);
+      lines.push(`  Flat-bet P&L      ${result.flat_bet_pnl >= 0 ? '+' : ''}$${result.flat_bet_pnl.toFixed(2)} (ROI: ${fmtRoi(result.flat_bet_roi)})`);
+    }
   }
 
   // ─── Zero-skill baselines ─────────────────────────────────────────────

@@ -24,6 +24,19 @@ export interface ScoredSignal {
   close_time: string;
 }
 
+/**
+ * Per-leg scorecard: realized P&L on the resolved leg, mark-to-market on the
+ * unresolved leg. Computed on the leg's subset of signals.
+ */
+export interface LegMetrics {
+  edge_signals: number;
+  edge_hit_rate: number;
+  hit_rate_ci: [number, number];
+  flat_bet_pnl: number;
+  flat_bet_roi: number;
+  total_capital: number;
+}
+
 export interface BacktestResult {
   verdict: { summary: string; significant: boolean; profitable: boolean };
   days: number;
@@ -49,6 +62,18 @@ export interface BacktestResult {
    * Surfaced so users can see the coverage cost of the strict gate.
    */
   signals_dropped_no_volume: number;
+  /**
+   * Sub-scorecards computed on the resolved and unresolved legs separately.
+   * Resolved settles at 0/100 — realized outcomes. Unresolved is marked to
+   * an arbitrary "now" price and may reverse before settlement. Blending
+   * them in the top-level fields can hide cases where the paper P&L
+   * inflates a weak realized result.
+   *
+   * The blended top-level fields (`edge_hit_rate`, `flat_bet_roi`, etc.)
+   * are kept for backward compatibility with existing consumers.
+   */
+  resolved_metrics: LegMetrics;
+  unresolved_metrics: LegMetrics;
   /**
    * Zero-skill baseline ROIs on the same post-filter universe. Always-NO is
    * the relevant null because Kalshi's universe is structurally NO-heavy:
