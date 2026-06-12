@@ -5,6 +5,16 @@ export interface FormatOpts {
   minEdge?: number;          // 0-1 scale, default 0.005 (0.5pp)
 }
 
+/** Format a 0-1 ROI as a signed percentage string. */
+function fmtRoi(roi: number): string {
+  return `${roi >= 0 ? '+' : ''}${(roi * 100).toFixed(1)}%`;
+}
+
+/** Format a percentage-point delta with sign. */
+function fmtPp(pp: number): string {
+  return `${pp >= 0 ? '+' : ''}${pp.toFixed(1)}pp`;
+}
+
 /**
  * Format complete backtest result for terminal display.
  */
@@ -50,6 +60,37 @@ export function formatBacktestHuman(result: BacktestResult, opts?: FormatOpts): 
     lines.push(`  Hit rate          ${(result.edge_hit_rate * 100).toFixed(1)}%  [95% CI: ${(result.hit_rate_ci[0] * 100).toFixed(1)}% to ${(result.hit_rate_ci[1] * 100).toFixed(1)}%]`);
     lines.push(`  Flat-bet P&L      ${result.flat_bet_pnl >= 0 ? '+' : ''}$${result.flat_bet_pnl.toFixed(2)} (ROI: ${result.flat_bet_roi >= 0 ? '+' : ''}${(result.flat_bet_roi * 100).toFixed(1)}%)`);
     lines.push(`  Capital deployed  $${result.total_capital.toFixed(2)}   (capital-weighted ROI)`);
+  }
+
+  // ─── Zero-skill baselines ─────────────────────────────────────────────
+  // The headline ROI / hit rate can look strong purely from the universe's
+  // structural NO tilt (multi-outcome events resolve mostly NO). These two
+  // baselines run the same post-filter universe under zero-skill strategies
+  // so the user can see whether the model adds anything.
+  const b = result.baselines;
+  if (result.signals.length > 0) {
+    lines.push('');
+    lines.push('  Zero-skill baselines (same universe, no model):');
+    lines.push(`    Always-NO ROI     ${fmtRoi(b.always_no_roi)}   hit rate ${(b.always_no_hit_rate * 100).toFixed(1)}%`);
+    lines.push(`    Always-YES ROI    ${fmtRoi(b.always_yes_roi)}   hit rate ${(b.always_yes_hit_rate * 100).toFixed(1)}%`);
+    lines.push(`    Within-band skill ${fmtPp(b.within_band_skill_pp)}   (model NO-ROI minus always-NO ROI, capital-weighted across entry-price bands)`);
+    // Per-band breakdown when at least one band has model bets
+    if (b.within_band_breakdown.some((r) => r.n_model > 0)) {
+      lines.push('');
+      lines.push('    Per-band skill breakdown:');
+      lines.push(`      ${'Band'.padEnd(8)}  ${'Model NO ROI'.padStart(13)}  ${'Always-NO ROI'.padStart(14)}  ${'Delta'.padStart(9)}  ${'n_model'.padStart(7)}  ${'n_total'.padStart(7)}`);
+      for (const row of b.within_band_breakdown) {
+        if (row.n_universe === 0) continue;
+        const delta = `${row.skill_delta_pp >= 0 ? '+' : ''}${row.skill_delta_pp.toFixed(1)}pp`;
+        lines.push(`      ${row.band.padEnd(8)}  ${fmtRoi(row.model_no_roi).padStart(13)}  ${fmtRoi(row.always_no_roi).padStart(14)}  ${delta.padStart(9)}  ${String(row.n_model).padStart(7)}  ${String(row.n_universe).padStart(7)}`);
+      }
+    }
+  }
+
+  // Coverage cost of the strict (no lifetime-volume look-ahead) volume gate.
+  if (result.signals_dropped_no_volume > 0) {
+    lines.push('');
+    lines.push(`  Signals dropped: ${result.signals_dropped_no_volume} (no per-contract volume in Octagon snapshot; lifetime-volume fallback removed to avoid look-ahead bias)`);
   }
 
   // Resolved detail table

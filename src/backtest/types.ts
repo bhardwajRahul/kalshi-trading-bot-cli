@@ -41,5 +41,44 @@ export interface BacktestResult {
   flat_bet_roi: number;       // capital-weighted: sum(pnl) / sum(capital) across edge signals
   total_capital: number;      // sum of capital across edge signals (ROI denominator)
   signals: ScoredSignal[];
+  /**
+   * Count of candidate signals dropped because the Octagon snapshot had no
+   * per-contract volume (older snapshots predate the per-contract field).
+   * We deliberately do NOT fall back to Kalshi lifetime volume — that
+   * would be a look-ahead bias (lifetime includes post-entry trading).
+   * Surfaced so users can see the coverage cost of the strict gate.
+   */
+  signals_dropped_no_volume: number;
+  /**
+   * Zero-skill baseline ROIs on the same post-filter universe. Always-NO is
+   * the relevant null because Kalshi's universe is structurally NO-heavy:
+   * multi-outcome events have one YES and many NOs. A model that consistently
+   * beats always-NO has selection skill; one that doesn't is mostly
+   * harvesting the favorite-longshot tilt.
+   */
+  baselines: {
+    always_no_roi: number;
+    always_no_hit_rate: number;
+    always_yes_roi: number;
+    always_yes_hit_rate: number;
+    /**
+     * Model NO-bet ROI minus always-NO ROI, computed in entry-price bands
+     * (5-20, 20-40, 40-60, 60-80, 80-95) and capital-weighted across bands.
+     * This is the honest "within-band skill" delta: it controls for both
+     * the structural NO tilt AND the entry-price mix.
+     */
+    within_band_skill_pp: number;
+    /**
+     * Per-band breakdown so users can see where the skill (if any) comes from.
+     */
+    within_band_breakdown: Array<{
+      band: string;            // e.g. "20-40¢"
+      model_no_roi: number;    // model NO-bet ROI in this band
+      always_no_roi: number;   // always-NO ROI in this band
+      skill_delta_pp: number;  // (model - baseline) × 100, percentage points
+      n_model: number;         // count of model NO bets in this band
+      n_universe: number;      // count of all-NO universe contracts in this band
+    }>;
+  };
   subscription_notice?: string;
 }

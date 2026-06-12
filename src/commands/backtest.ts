@@ -37,21 +37,24 @@ function edgeBucketLabel(edgePp: number): string {
 }
 
 /**
- * Return the tradeable volume for a contract.
- * Prefers per-contract volume fields from the Octagon snapshot (as the
- * Supabase methodology does); falls back to Kalshi lifetime volume for
- * older cached snapshots that pre-date the API's per-contract volume.
+ * Return the tradeable volume for a contract, measured AT SNAPSHOT TIME.
+ *
+ * Returns null when the Octagon snapshot has no per-contract volume — older
+ * snapshots predate the per-contract field. We deliberately do NOT fall back
+ * to Kalshi LIFETIME volume here: lifetime volume includes trading that
+ * happened *after* the entry date, so a contract with zero liquidity at
+ * entry that later became active would silently pass the tradeability gate
+ * retroactively (look-ahead bias on the tradeable filter).
+ *
+ * Callers should skip the signal when this returns null and count it as
+ * "dropped via no per-contract volume" so the coverage cost is visible.
  */
-function contractVolume(
-  perContract: OutcomeProbability | null,
-  fallbackLifetimeVolume: number,
-): number {
-  if (perContract) {
-    const v = typeof perContract.volume === 'number' ? perContract.volume : null;
-    const v24 = typeof perContract.volume_24h === 'number' ? perContract.volume_24h : null;
-    if (v !== null || v24 !== null) return Math.max(v ?? 0, v24 ?? 0);
-  }
-  return fallbackLifetimeVolume;
+function contractVolume(perContract: OutcomeProbability | null): number | null {
+  if (!perContract) return null;
+  const v = typeof perContract.volume === 'number' ? perContract.volume : null;
+  const v24 = typeof perContract.volume_24h === 'number' ? perContract.volume_24h : null;
+  if (v === null && v24 === null) return null;
+  return Math.max(v ?? 0, v24 ?? 0);
 }
 
 export { formatBacktestHuman };
@@ -74,6 +77,10 @@ export async function handleBacktest(args: ParsedArgs): Promise<CLIResponse<Back
 
   const signals: ScoredSignal[] = [];
   let subscriptionNotice: string | undefined;
+  // Counter for signals dropped because the Octagon snapshot had no
+  // per-contract volume. Surfaced in the result so users can see how much
+  // coverage the strict (no lifetime-volume look-ahead) gate cost them.
+  let signalsDroppedNoVolume = 0;
 
   // ─── RESOLVED: settled markets with historical Octagon snapshots ────────
   if (!args.unresolved) {
@@ -117,10 +124,11 @@ export async function handleBacktest(args: ParsedArgs): Promise<CLIResponse<Back
             const marketNow = m.result === 'yes' ? 100 : 0;
             const edgePp = Math.round((modelProb - marketThen) * 10) / 10;
 
-            // Tradeable filter — per-contract volume from the Octagon snapshot
-            // (matches Supabase methodology); falls back to Kalshi lifetime
-            // volume for pre-API-change cached snapshots.
-            const vol = contractVolume(perMarket, m.volume);
+            // Tradeable filter — per-contract volume from the Octagon
+            // snapshot only (no Kalshi lifetime-volume fallback, which would
+            // be a look-ahead since lifetime includes post-entry trading).
+            const vol = contractVolume(perMarket);
+            if (vol === null) { signalsDroppedNoVolume++; continue; }
             if (vol < minVolume) continue;
             // Price is marketThen (the price you'd transact at for a resolved bet).
             if (marketThen < minPrice || marketThen > maxPrice) continue;
@@ -209,11 +217,18 @@ export async function handleBacktest(args: ParsedArgs): Promise<CLIResponse<Back
           const marketNow = m.market_prob * 100; // current Kalshi price (0-100)
           const edgePp = Math.round((modelProb - marketThen) * 10) / 10;
 
-          // Tradeable filter — per-contract volume from the Octagon snapshot.
-          const vol = contractVolume(perMarket, m.volume);
+          // Tradeable filter — per-contract volume from the Octagon snapshot
+          // only (no Kalshi lifetime-volume fallback, see contractVolume).
+          const vol = contractVolume(perMarket);
+          if (vol === null) { signalsDroppedNoVolume++; continue; }
           if (vol < minVolume) continue;
-          // Price is marketNow (the current transactable price for an open position).
-          if (marketNow < minPrice || marketNow > maxPrice) continue;
+          // Filter on the ENTRY price (marketThen), not the current mark
+          // (marketNow). Filtering on marketNow conditions the sample on
+          // the outcome: positions that collapsed below minPrice or ran
+          // above maxPrice get silently dropped *after* we observe the
+          // move. That truncates both tails of the P&L distribution and
+          // is a look-ahead bias. Matches the resolved leg above.
+          if (marketThen < minPrice || marketThen > maxPrice) continue;
 
           // M2M P&L and capital per $1 face value.
           let pnl = 0;
@@ -265,6 +280,7 @@ export async function handleBacktest(args: ParsedArgs): Promise<CLIResponse<Back
   const result: BacktestResult = {
     ...metrics,
     days,
+    signals_dropped_no_volume: signalsDroppedNoVolume,
     subscription_notice: subscriptionNotice,
   };
 
