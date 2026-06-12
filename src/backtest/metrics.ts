@@ -45,6 +45,68 @@ export function bootstrapCI(
 }
 
 /**
+ * Cluster bootstrap — resamples GROUPS with replacement, not individual rows.
+ *
+ * Use when the unit of risk is the group, not the row. In our case Kalshi
+ * events are multi-outcome: a single "Will the Fed cut N times?" event has
+ * a ladder of NO contracts that all settle together. If the model bets NO
+ * on five rungs and the Fed cuts once, all five settle NO simultaneously
+ * — that's *one* underlying outcome contributing five rows.
+ *
+ * Row-level bootstrap (`bootstrapCI` above) treats those rows as independent
+ * → CI width shrinks with √N where N is the row count. Real effective N is
+ * closer to the event count, so the honest interval is roughly 2× wider.
+ *
+ * This function takes `groups` (each group = a contiguous block of indices
+ * referring to per-row data carried in closures by `statFn`), draws
+ * `groups.length` groups with replacement per iteration, concatenates the
+ * indices, and applies `statFn` to the pooled sample.
+ */
+export function clusterBootstrapCI(
+  groups: number[][],
+  statFn: (sampleIndices: number[]) => number,
+  iterations = 10_000,
+  alpha = 0.05,
+): [number, number] {
+  if (groups.length === 0) return [0, 0];
+  if (!Number.isFinite(iterations) || !Number.isInteger(iterations) || iterations <= 0) {
+    throw new Error(`clusterBootstrapCI: iterations must be a finite integer > 0, got ${iterations}`);
+  }
+  if (!Number.isFinite(alpha) || alpha <= 0 || alpha >= 1) {
+    throw new Error(`clusterBootstrapCI: alpha must be a finite number in (0, 1), got ${alpha}`);
+  }
+  const stats: number[] = [];
+  for (let i = 0; i < iterations; i++) {
+    const pooled: number[] = [];
+    for (let j = 0; j < groups.length; j++) {
+      const g = groups[Math.floor(Math.random() * groups.length)];
+      pooled.push(...g);
+    }
+    if (pooled.length === 0) { stats.push(0); continue; }
+    stats.push(statFn(pooled));
+  }
+  stats.sort((a, b) => a - b);
+  const lo = Math.min(Math.max(0, Math.floor((alpha / 2) * stats.length)), stats.length - 1);
+  const hi = Math.min(Math.max(0, Math.floor((1 - alpha / 2) * stats.length)), stats.length - 1);
+  return [stats[lo], stats[hi]];
+}
+
+/**
+ * Build event-clustered groups: indices for each signal grouped by event_ticker.
+ * Used to feed clusterBootstrapCI when the underlying signals are correlated
+ * within an event (multi-outcome ladders, mutually-exclusive option sets).
+ */
+function groupIndicesByEvent<T extends { event_ticker: string }>(items: T[]): number[][] {
+  const byEvent = new Map<string, number[]>();
+  items.forEach((item, idx) => {
+    const arr = byEvent.get(item.event_ticker) ?? [];
+    arr.push(idx);
+    byEvent.set(item.event_ticker, arr);
+  });
+  return [...byEvent.values()];
+}
+
+/**
  * Compute Brier score: ((forecast/100) - (outcome/100))²
  * Both forecast and outcome are on 0-100 scale.
  */
@@ -165,8 +227,13 @@ function computeLegMetrics(signals: ScoredSignal[], minEdgePp: number): LegMetri
   const hitRateData = edgeSignals.map((s) =>
     s.edge_pp > 0 ? (s.market_now > s.market_then ? 1 : 0) : (s.market_now < s.market_then ? 1 : 0),
   );
+  const legEventGroups = groupIndicesByEvent(edgeSignals);
   const hitRateCI: [number, number] = edgeCount > 0
-    ? bootstrapCI(hitRateData, (sample) => sample.reduce((a, b) => a + b, 0) / sample.length)
+    ? clusterBootstrapCI(legEventGroups, (sample) => {
+        let sum = 0;
+        for (const idx of sample) sum += hitRateData[idx];
+        return sample.length > 0 ? sum / sample.length : 0;
+      })
     : [0, 0];
   const pnl = edgeSignals.reduce((sum, s) => sum + s.pnl, 0);
   const totalCapital = edgeSignals.reduce((sum, s) => sum + s.capital, 0);
@@ -234,10 +301,14 @@ export function computeMetrics(signals: ScoredSignal[], minEdgePp = 0.5): Omit<B
   const brierOctagon = brierOctagonScores.reduce((a, b) => a + b, 0) / n;
   const brierMarket = brierMarketScores.reduce((a, b) => a + b, 0) / n;
 
-  // Skill score with bootstrap CI — resample both
+  // Skill score with EVENT-CLUSTERED bootstrap CI. Why clustered: multi-
+  // outcome events (Fed-cut ladders, election option sets, price strikes)
+  // settle as a block — N contracts from one event aren't N independent
+  // observations. Row-level bootstrap shrinks the CI with sqrt(N rows)
+  // when the right denominator is sqrt(N events).
   const skillScore = computeSkillScore(brierOctagon, brierMarket);
-  const indices = signals.map((_, i) => i);
-  const skillCI = bootstrapCI(indices, (sample) => {
+  const eventGroups = groupIndicesByEvent(signals);
+  const skillCI = clusterBootstrapCI(eventGroups, (sample) => {
     let sumOctagon = 0;
     let sumMarket = 0;
     for (const idx of sample) {
@@ -262,13 +333,16 @@ export function computeMetrics(signals: ScoredSignal[], minEdgePp = 0.5): Omit<B
   });
   const hitRate = edgeCount > 0 ? hits.length / edgeCount : 0;
 
-  // Bootstrap hit rate CI
+  // Event-clustered hit rate CI on the EDGE signals only.
   const hitRateData = edgeSignals.map(s => {
     if (s.edge_pp > 0) return s.market_now > s.market_then ? 1 : 0;
     return s.market_now < s.market_then ? 1 : 0;
   });
-  const hitRateCI = bootstrapCI(hitRateData, (sample) => {
-    return sample.reduce((a, b) => a + b, 0) / sample.length;
+  const edgeEventGroups = groupIndicesByEvent(edgeSignals);
+  const hitRateCI = clusterBootstrapCI(edgeEventGroups, (sample) => {
+    let sum = 0;
+    for (const idx of sample) sum += hitRateData[idx];
+    return sample.length > 0 ? sum / sample.length : 0;
   });
 
   // P&L and capital-weighted ROI (matches Supabase methodology):
