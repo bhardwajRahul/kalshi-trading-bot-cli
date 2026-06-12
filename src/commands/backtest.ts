@@ -2,7 +2,7 @@ import type { ParsedArgs } from './parse-args.js';
 import type { CLIResponse } from './json.js';
 import { wrapSuccess } from './json.js';
 import { getDb } from '../db/index.js';
-import { discoverSettledMarkets, discoverOpenMarkets, parallelMap } from '../backtest/discovery.js';
+import { discoverSettledMarkets, discoverOpenMarkets, parallelMap, resolveUniverse, fetchEventPayloads } from '../backtest/discovery.js';
 import { fetchAndCacheHistory, selectSnapshotByDate, SubscriptionRequiredError, type OutcomeProbability } from '../backtest/fetcher.js';
 import { computeMetrics } from '../backtest/metrics.js';
 import type { BacktestResult, ScoredSignal } from '../backtest/types.js';
@@ -82,10 +82,21 @@ export async function handleBacktest(args: ParsedArgs): Promise<CLIResponse<Back
   // coverage the strict (no lifetime-volume look-ahead) gate cost them.
   let signalsDroppedNoVolume = 0;
 
+  // ─── UNIVERSE RESOLUTION (Phase 4, Issue 7) ────────────────────────────
+  // Resolve once and share the Kalshi event-payload map between both legs
+  // so we fetch each event payload only once instead of twice. The
+  // payloads map is built lazily — we only fetch when at least one leg
+  // will use it.
+  const universeSource = args.backtestUniverse ?? 'api';
+  const universe = await resolveUniverse(db, { source: universeSource, category: args.category });
+  // Fetch all event payloads once and share between legs. parallelMap
+  // caps concurrency so this doesn't hammer Kalshi.
+  const payloads = await fetchEventPayloads(universe.events);
+
   // ─── RESOLVED: settled markets with historical Octagon snapshots ────────
   if (!args.unresolved) {
     try {
-      const settled = await discoverSettledMarkets(db, { category: args.category });
+      const settled = await discoverSettledMarkets(db, { universe, payloads, category: args.category });
 
       if (settled.length > 0) {
         // Group by event_ticker to batch history fetches
@@ -183,7 +194,7 @@ export async function handleBacktest(args: ParsedArgs): Promise<CLIResponse<Back
   // ─── UNRESOLVED: open markets with current Kalshi prices ───────────────
   if (!args.resolved) {
     try {
-      const openMarkets = await discoverOpenMarkets(db, { category: args.category });
+      const openMarkets = await discoverOpenMarkets(db, { universe, payloads, category: args.category });
 
       // Group by event_ticker to batch history fetches (same as resolved path).
       const openByEvent = new Map<string, typeof openMarkets>();
@@ -277,10 +288,34 @@ export async function handleBacktest(args: ParsedArgs): Promise<CLIResponse<Back
   // ─── COMPUTE METRICS ───────────────────────────────────────────────────
   const metrics = computeMetrics(signals, minEdgePp);
 
+  // Fee model — defaults to 'none' so existing output is unchanged. With
+  // --fees taker we apply Kalshi's taker formula: 0.07 × p × (1−p) per
+  // entry, where p is the entry probability for the side we took. Maker
+  // execution assumes zero entry fee.
+  // We compute on the EDGE signals only (same population as flat_bet_pnl).
+  const feeModel = args.backtestFees ?? 'none';
+  let feeDrag = 0;
+  if (feeModel === 'taker') {
+    for (const s of signals) {
+      if (s.edge_pp === 0 || Math.abs(s.edge_pp) < minEdgePp) continue;
+      // Entry probability on the side we took (YES on positive edge, NO on negative).
+      const p = (s.edge_pp > 0 ? s.market_then : (100 - s.market_then)) / 100;
+      feeDrag += 0.07 * p * (1 - p);
+    }
+  }
+  const flatBetPnlNet = metrics.flat_bet_pnl - feeDrag;
+  const flatBetRoiNet = metrics.total_capital > 0 ? flatBetPnlNet / metrics.total_capital : 0;
+
   const result: BacktestResult = {
     ...metrics,
     days,
     signals_dropped_no_volume: signalsDroppedNoVolume,
+    universe_source: universe.source,
+    universe_size: universe.events.length,
+    universe_description: universe.description,
+    fee_model: feeModel,
+    flat_bet_pnl_net: flatBetPnlNet,
+    flat_bet_roi_net: flatBetRoiNet,
     subscription_notice: subscriptionNotice,
   };
 

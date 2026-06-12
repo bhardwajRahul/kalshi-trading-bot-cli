@@ -120,6 +120,10 @@ ${p}backtest --category crypto            Filter by category
 ${p}backtest --min-edge 10                Stricter edge threshold in pp (default 0.5pp)
 ${p}backtest --min-volume 10              Per-contract volume gate (default 1)
 ${p}backtest --min-price 5 --max-price 95 Tradeable price band 0-100 (defaults: 5 / 95)
+${p}backtest --universe api              Systematic Octagon-API universe (default; reproducible across machines)
+${p}backtest --universe local            Legacy local octagon_reports universe (offline, NON-SYSTEMATIC)
+${p}backtest --fees taker                Apply Kalshi taker fee (0.07·p·(1−p) per entry); default 'none' = gross
+${p}backtest --fees maker                Maker execution (free entry)
 ${p}backtest --export results.csv         Per-market detail CSV
 ${p}backtest --json                       Machine-readable output
 

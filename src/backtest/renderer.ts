@@ -27,6 +27,8 @@ export function formatBacktestHuman(result: BacktestResult, opts?: FormatOpts): 
 
   const lines: string[] = [];
   lines.push(`Octagon Backtest — ${result.days}-day lookback (${fromStr} – ${toStr})`);
+  lines.push(`Universe: ${result.universe_description}`);
+  lines.push(`Fee model: ${result.fee_model === 'none' ? 'none — output is GROSS (pre-fee)' : result.fee_model + ' (entries charged Kalshi taker fee = 0.07·p·(1−p))'}`);
   lines.push('══════════════════════════════════════════════════════════');
   lines.push('');
 
@@ -79,6 +81,15 @@ export function formatBacktestHuman(result: BacktestResult, opts?: FormatOpts): 
       lines.push('  COMBINED (both legs blended — interpret with care)');
       lines.push(`    Hit rate        ${(result.edge_hit_rate * 100).toFixed(1)}%  [95% CI: ${(result.hit_rate_ci[0] * 100).toFixed(1)}% to ${(result.hit_rate_ci[1] * 100).toFixed(1)}%, event-clustered]`);
       lines.push(`    Flat-bet P&L    ${fmtRoi(result.flat_bet_roi)} ROI  (${result.flat_bet_pnl >= 0 ? '+' : ''}$${result.flat_bet_pnl.toFixed(2)} on $${result.total_capital.toFixed(2)} capital)`);
+    }
+    // Fee drag — show only when --fees is on so existing output is unchanged.
+    if (result.fee_model !== 'none' && result.flat_bet_pnl !== result.flat_bet_pnl_net) {
+      const feeDrag = result.flat_bet_pnl - result.flat_bet_pnl_net;
+      lines.push('');
+      lines.push(`  Fees applied (${result.fee_model})`);
+      lines.push(`    Gross P&L       ${result.flat_bet_pnl >= 0 ? '+' : ''}$${result.flat_bet_pnl.toFixed(2)} (${fmtRoi(result.flat_bet_roi)} ROI)`);
+      lines.push(`    Fee drag        -$${feeDrag.toFixed(2)}`);
+      lines.push(`    Net P&L         ${result.flat_bet_pnl_net >= 0 ? '+' : ''}$${result.flat_bet_pnl_net.toFixed(2)} (${fmtRoi(result.flat_bet_roi_net)} ROI)`);
     } else if (r.edge_signals === 0 && u.edge_signals === 0) {
       // No edge signals on either leg — fall back to the old single-line view.
       lines.push(`  Hit rate          ${(result.edge_hit_rate * 100).toFixed(1)}%  [95% CI: ${(result.hit_rate_ci[0] * 100).toFixed(1)}% to ${(result.hit_rate_ci[1] * 100).toFixed(1)}%]`);

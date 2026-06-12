@@ -269,7 +269,7 @@ const EMPTY_BASELINES: BacktestResult['baselines'] = {
 /**
  * Compute all backtest metrics from a unified list of scored signals.
  */
-export function computeMetrics(signals: ScoredSignal[], minEdgePp = 0.5): Omit<BacktestResult, 'subscription_notice' | 'signals_dropped_no_volume'> {
+export function computeMetrics(signals: ScoredSignal[], minEdgePp = 0.5): Omit<BacktestResult, 'subscription_notice' | 'signals_dropped_no_volume' | 'universe_source' | 'universe_size' | 'universe_description' | 'fee_model' | 'flat_bet_pnl_net' | 'flat_bet_roi_net'> {
   const n = signals.length;
   if (n === 0) {
     return {

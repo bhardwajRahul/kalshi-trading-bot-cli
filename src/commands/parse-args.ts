@@ -40,6 +40,10 @@ export interface ParsedArgs {
   category?: string;
   limit?: number;
   exportPath?: string;
+  /** Backtest universe source — 'api' (default) or 'local'. */
+  backtestUniverse?: 'api' | 'local';
+  /** Backtest fee model — 'none' (default), 'taker', or 'maker'. */
+  backtestFees?: 'none' | 'taker' | 'maker';
   minVolume?: number;
   minPrice?: number;
   maxPrice?: number;
@@ -98,6 +102,8 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): ParsedArgs {
   let category: string | undefined;
   let limit: number | undefined;
   let exportPath: string | undefined;
+  let backtestUniverse: 'api' | 'local' | undefined;
+  let backtestFees: 'none' | 'taker' | 'maker' | undefined;
   let maxAge: number | undefined;
   let minVolume: number | undefined;
   let minPrice: number | undefined;
@@ -237,6 +243,14 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): ParsedArgs {
     } else if (arg === '--export') {
       const val = argv[++i];
       if (val != null) { exportPath = val; } else { parseErrors.push('--export requires a value'); }
+    } else if (arg === '--universe') {
+      const val = argv[++i];
+      if (val === 'api' || val === 'local') { backtestUniverse = val; }
+      else { parseErrors.push(`Invalid --universe value: "${val}" (expected "api" or "local")`); }
+    } else if (arg === '--fees') {
+      const val = argv[++i];
+      if (val === 'none' || val === 'taker' || val === 'maker') { backtestFees = val; }
+      else { parseErrors.push(`Invalid --fees value: "${val}" (expected "none", "taker", or "maker")`); }
     } else if (arg === '--max-age') {
       const raw = argv[++i];
       if (raw != null) {
@@ -431,7 +445,7 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): ParsedArgs {
   return {
     subcommand, positionalArgs, json, theme, ticker, interval, since, minConfidence, minEdge, side,
     live, refresh, report, dryRun, verbose, performance, resolved, unresolved, days, maxAge, category,
-    limit, exportPath, minVolume, minPrice, maxPrice,
+    limit, exportPath, backtestUniverse, backtestFees, minVolume, minPrice, maxPrice,
     topK, behavioral, ranked, labelContains, closeBefore, windowDays, correlationInterval, timeframe,
     weights, bankroll, kellyMultiplier, n, maxPerCluster, maxCorrelation, minReturn, seriesTicker,
     sortBy, probabilities, tickers, query, showCluster, aggregateBy, activeOnly,

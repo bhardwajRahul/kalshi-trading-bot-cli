@@ -5,6 +5,10 @@ export interface BacktestOpts {
   category?: string;
   minEdge: number;            // fractional (0-1 scale), converted to pp by caller (e.g., 0.005 → 0.5pp)
   exportPath?: string;
+  /** Where the universe is sourced from. Default 'api'. */
+  universe?: 'api' | 'local';
+  /** Fee model for net P&L. Default 'none' — output is gross. */
+  fees?: 'none' | 'taker' | 'maker';
 }
 
 /** A single scored market signal — unified type for both resolved and unresolved. */
@@ -62,6 +66,24 @@ export interface BacktestResult {
    * Surfaced so users can see the coverage cost of the strict gate.
    */
   signals_dropped_no_volume: number;
+  /**
+   * Provenance for the universe — printed in the scorecard header so users
+   * (and downstream JSON consumers) can see whether the backtest ran over
+   * the systematic Octagon-API universe or the legacy local-DB universe.
+   */
+  universe_source: 'api' | 'local';
+  universe_size: number;
+  universe_description: string;
+  /**
+   * Fee model applied to the P&L. 'none' means the reported P&L is gross
+   * (no fees, no spreads). 'taker' charges the Kalshi taker fee per entry.
+   * 'maker' assumes free entry. Default 'none' so existing output is
+   * unchanged — opt in with --fees taker.
+   */
+  fee_model: 'none' | 'taker' | 'maker';
+  /** P&L net of fees when fee_model != 'none', else equal to flat_bet_pnl. */
+  flat_bet_pnl_net: number;
+  flat_bet_roi_net: number;
   /**
    * Sub-scorecards computed on the resolved and unresolved legs separately.
    * Resolved settles at 0/100 — realized outcomes. Unresolved is marked to
