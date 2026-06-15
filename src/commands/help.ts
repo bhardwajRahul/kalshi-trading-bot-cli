@@ -131,8 +131,9 @@ Looks back N days, compares what the model said then to where the market is now.
 Resolved markets: scored against Kalshi settlement (0 or 100).
 Unresolved markets: mark-to-market vs current Kalshi trading price.
 Per-contract entry: mp/kp come from the per-contract outcome_probabilities on the
-Octagon snapshot (no event-level fallback). Volume gate uses per-contract volume
-from the snapshot when available, else current Kalshi lifetime volume.
+Octagon snapshot (no event-level fallback). Volume gate requires per-contract
+volume from the snapshot; signals without it are dropped (the legacy fallback
+to Kalshi lifetime volume was a look-ahead and has been removed).
 ROI is capital-weighted: sum(pnl) / sum(capital) across edge signals, where capital
 is kp/100 for YES edges and (100-kp)/100 for NO edges (matches Supabase methodology).`,
 
@@ -471,7 +472,8 @@ System:
 
 Flags: --json, --refresh, --performance, --dry-run, --verbose
 Backtest flags: --days, --max-age, --resolved, --unresolved, --category, --min-edge,
-                --min-volume, --min-price, --max-price, --export
+                --min-volume, --min-price, --max-price, --export,
+                --universe api|local (default api), --fees none|taker|maker (default none)
 Run "kalshi help <command>" for detailed usage.`;
   }
 

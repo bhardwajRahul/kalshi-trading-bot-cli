@@ -422,20 +422,24 @@ export async function handleAnalyze(
   //   modelRunAt  = Octagon's analysis_last_updated (when their model last
   //                 scored this event). Independent of our cache.
   //
-  // The prefetch path persists rows keyed by event_ticker (variant_used =
-  // 'events-api') and carries analysis_last_updated. The on-demand fetchReport
-  // path persists rows keyed by market_ticker but does NOT carry
-  // analysis_last_updated (the per-market cache API doesn't expose it). So
-  // when resolveMarket picks a child contract from an event ladder, the
-  // ticker-keyed lookup finds a fetchReport row with analysis_last_updated =
-  // null — even though Octagon has a fresh prefetched timestamp at the
-  // event level. Fall back to the event-keyed prefetch row to surface it.
-  // When the resolved ticker is a child market with no fetchReport row of its
-  // own (e.g. the report was served directly from a prefetched event-level
-  // row), look up the event-keyed prefetch row for both timestamps so
-  // refreshedAt and modelRunAt aren't null on every prefetch-cache-hit.
-  let fetchedAtEpoch = latestDbReport?.fetched_at ?? null;
-  let analysisLastUpdated = latestDbReport?.analysis_last_updated ?? null;
+  // Load timestamps from a single coherent source — the row identified by
+  // report.reportId is the exact row used for THIS analysis. The previous
+  // implementation mixed fields from market-keyed and event-keyed rows
+  // (different captured runs), so refreshedAt and modelRunAt could refer
+  // to different snapshots.
+  //
+  // If the primary row doesn't carry analysis_last_updated (fetchReport
+  // path doesn't expose it), fall back to the latest event-keyed prefetch
+  // row for that field only — never for fetched_at.
+  const primaryRow = report.reportId
+    ? db.query(
+        `SELECT fetched_at, analysis_last_updated FROM octagon_reports WHERE report_id = $rid`,
+      ).get({ $rid: report.reportId }) as
+        | { fetched_at: number; analysis_last_updated: string | null }
+        | undefined
+    : undefined;
+  let fetchedAtEpoch = primaryRow?.fetched_at ?? null;
+  let analysisLastUpdated = primaryRow?.analysis_last_updated ?? null;
   if ((!fetchedAtEpoch || !analysisLastUpdated) && eventTicker && eventTicker !== resolvedTicker) {
     const eventRow = db.query(
       `SELECT fetched_at, analysis_last_updated FROM octagon_reports
@@ -460,12 +464,13 @@ export async function handleAnalyze(
 
   // staleUpstream = user asked for --refresh but Octagon's upstream model run
   // timestamp didn't move. Cache fetch time bumped, but the underlying report
-  // body is the same one Octagon previously generated. The user wanted fresh
-  // analysis; they got an unchanged stale one.
+  // body is the same one Octagon previously generated. Compare against the
+  // same coherent source we used for modelRunAt above — otherwise we could
+  // false-positive on staleness when the two lookups disagreed.
   const staleUpstream = refresh
     && preRefreshAnalysis != null
-    && latestDbReport?.analysis_last_updated != null
-    && preRefreshAnalysis === latestDbReport.analysis_last_updated;
+    && analysisLastUpdated != null
+    && preRefreshAnalysis === analysisLastUpdated;
 
   // Null out trading-side fields when the underlying inputs are unavailable.
   // JSON consumers previously saw modelProb: 0.5 / marketProb: 0.5 / edge: 0

@@ -244,13 +244,21 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): ParsedArgs {
       const val = argv[++i];
       if (val != null) { exportPath = val; } else { parseErrors.push('--export requires a value'); }
     } else if (arg === '--universe') {
-      const val = argv[++i];
-      if (val === 'api' || val === 'local') { backtestUniverse = val; }
-      else { parseErrors.push(`Invalid --universe value: "${val}" (expected "api" or "local")`); }
+      if (i + 1 >= argv.length) {
+        parseErrors.push('--universe requires a value (expected "api" or "local")');
+      } else {
+        const val = argv[++i];
+        if (val === 'api' || val === 'local') { backtestUniverse = val; }
+        else { parseErrors.push(`Invalid --universe value: "${val}" (expected "api" or "local")`); }
+      }
     } else if (arg === '--fees') {
-      const val = argv[++i];
-      if (val === 'none' || val === 'taker' || val === 'maker') { backtestFees = val; }
-      else { parseErrors.push(`Invalid --fees value: "${val}" (expected "none", "taker", or "maker")`); }
+      if (i + 1 >= argv.length) {
+        parseErrors.push('--fees requires a value (expected "none", "taker", or "maker")');
+      } else {
+        const val = argv[++i];
+        if (val === 'none' || val === 'taker' || val === 'maker') { backtestFees = val; }
+        else { parseErrors.push(`Invalid --fees value: "${val}" (expected "none", "taker", or "maker")`); }
+      }
     } else if (arg === '--max-age') {
       const raw = argv[++i];
       if (raw != null) {

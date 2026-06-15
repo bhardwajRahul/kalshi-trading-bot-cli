@@ -28,7 +28,19 @@ export function formatBacktestHuman(result: BacktestResult, opts?: FormatOpts): 
   const lines: string[] = [];
   lines.push(`Octagon Backtest — ${result.days}-day lookback (${fromStr} – ${toStr})`);
   lines.push(`Universe: ${result.universe_description}`);
-  lines.push(`Fee model: ${result.fee_model === 'none' ? 'none — output is GROSS (pre-fee)' : result.fee_model + ' (entries charged Kalshi taker fee = 0.07·p·(1−p))'}`);
+  let feeHeader: string;
+  switch (result.fee_model) {
+    case 'none':
+      feeHeader = 'none — output is GROSS (pre-fee)';
+      break;
+    case 'taker':
+      feeHeader = 'taker (entries charged Kalshi taker fee = 0.07·p·(1−p))';
+      break;
+    case 'maker':
+      feeHeader = 'maker (free-entry execution assumption — net P&L equals gross)';
+      break;
+  }
+  lines.push(`Fee model: ${feeHeader}`);
   lines.push('══════════════════════════════════════════════════════════');
   lines.push('');
 

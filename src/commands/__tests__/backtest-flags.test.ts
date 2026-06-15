@@ -37,4 +37,20 @@ describe('backtest flags — --universe and --fees', () => {
     expect(a.backtestUniverse).toBeUndefined();
     expect(a.backtestFees).toBeUndefined();
   });
+
+  test('--universe at end of argv → error mentions required value, not "undefined"', () => {
+    const a = parseArgs(['backtest', '--universe']);
+    expect(a.parseErrors.length).toBe(1);
+    expect(a.parseErrors[0]).toContain('--universe requires a value');
+    expect(a.parseErrors[0]).not.toContain('undefined');
+    expect(a.backtestUniverse).toBeUndefined();
+  });
+
+  test('--fees at end of argv → error mentions required value, not "undefined"', () => {
+    const a = parseArgs(['backtest', '--fees']);
+    expect(a.parseErrors.length).toBe(1);
+    expect(a.parseErrors[0]).toContain('--fees requires a value');
+    expect(a.parseErrors[0]).not.toContain('undefined');
+    expect(a.backtestFees).toBeUndefined();
+  });
 });
