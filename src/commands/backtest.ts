@@ -2,7 +2,7 @@ import type { ParsedArgs } from './parse-args.js';
 import type { CLIResponse } from './json.js';
 import { wrapSuccess } from './json.js';
 import { getDb } from '../db/index.js';
-import { discoverSettledMarkets, discoverOpenMarkets, parallelMap } from '../backtest/discovery.js';
+import { discoverSettledMarkets, discoverOpenMarkets, parallelMap, resolveUniverse, fetchEventPayloads } from '../backtest/discovery.js';
 import { fetchAndCacheHistory, selectSnapshotByDate, SubscriptionRequiredError, type OutcomeProbability } from '../backtest/fetcher.js';
 import { computeMetrics } from '../backtest/metrics.js';
 import type { BacktestResult, ScoredSignal } from '../backtest/types.js';
@@ -37,21 +37,24 @@ function edgeBucketLabel(edgePp: number): string {
 }
 
 /**
- * Return the tradeable volume for a contract.
- * Prefers per-contract volume fields from the Octagon snapshot (as the
- * Supabase methodology does); falls back to Kalshi lifetime volume for
- * older cached snapshots that pre-date the API's per-contract volume.
+ * Return the tradeable volume for a contract, measured AT SNAPSHOT TIME.
+ *
+ * Returns null when the Octagon snapshot has no per-contract volume — older
+ * snapshots predate the per-contract field. We deliberately do NOT fall back
+ * to Kalshi LIFETIME volume here: lifetime volume includes trading that
+ * happened *after* the entry date, so a contract with zero liquidity at
+ * entry that later became active would silently pass the tradeability gate
+ * retroactively (look-ahead bias on the tradeable filter).
+ *
+ * Callers should skip the signal when this returns null and count it as
+ * "dropped via no per-contract volume" so the coverage cost is visible.
  */
-function contractVolume(
-  perContract: OutcomeProbability | null,
-  fallbackLifetimeVolume: number,
-): number {
-  if (perContract) {
-    const v = typeof perContract.volume === 'number' ? perContract.volume : null;
-    const v24 = typeof perContract.volume_24h === 'number' ? perContract.volume_24h : null;
-    if (v !== null || v24 !== null) return Math.max(v ?? 0, v24 ?? 0);
-  }
-  return fallbackLifetimeVolume;
+function contractVolume(perContract: OutcomeProbability | null): number | null {
+  if (!perContract) return null;
+  const v = typeof perContract.volume === 'number' ? perContract.volume : null;
+  const v24 = typeof perContract.volume_24h === 'number' ? perContract.volume_24h : null;
+  if (v === null && v24 === null) return null;
+  return Math.max(v ?? 0, v24 ?? 0);
 }
 
 export { formatBacktestHuman };
@@ -74,11 +77,26 @@ export async function handleBacktest(args: ParsedArgs): Promise<CLIResponse<Back
 
   const signals: ScoredSignal[] = [];
   let subscriptionNotice: string | undefined;
+  // Counter for signals dropped because the Octagon snapshot had no
+  // per-contract volume. Surfaced in the result so users can see how much
+  // coverage the strict (no lifetime-volume look-ahead) gate cost them.
+  let signalsDroppedNoVolume = 0;
+
+  // ─── UNIVERSE RESOLUTION (Phase 4, Issue 7) ────────────────────────────
+  // Resolve once and share the Kalshi event-payload map between both legs
+  // so we fetch each event payload only once instead of twice. The
+  // payloads map is built lazily — we only fetch when at least one leg
+  // will use it.
+  const universeSource = args.backtestUniverse ?? 'api';
+  const universe = await resolveUniverse(db, { source: universeSource, category: args.category });
+  // Fetch all event payloads once and share between legs. parallelMap
+  // caps concurrency so this doesn't hammer Kalshi.
+  const payloads = await fetchEventPayloads(universe.events);
 
   // ─── RESOLVED: settled markets with historical Octagon snapshots ────────
   if (!args.unresolved) {
     try {
-      const settled = await discoverSettledMarkets(db, { category: args.category });
+      const settled = await discoverSettledMarkets(db, { universe, payloads, category: args.category });
 
       if (settled.length > 0) {
         // Group by event_ticker to batch history fetches
@@ -115,12 +133,17 @@ export async function handleBacktest(args: ParsedArgs): Promise<CLIResponse<Back
             const marketThen = perMarket.market_probability;
             if (!Number.isFinite(modelProb) || !Number.isFinite(marketThen)) continue;
             const marketNow = m.result === 'yes' ? 100 : 0;
-            const edgePp = Math.round((modelProb - marketThen) * 10) / 10;
+            // Unrounded edge — filtering happens downstream against the
+            // raw value. Display layer rounds for presentation. Rounding
+            // here makes the minEdge filter asymmetric (0.449 rounds to 0.4
+            // and is excluded; 0.451 rounds to 0.5 and is included).
+            const edgePp = modelProb - marketThen;
 
-            // Tradeable filter — per-contract volume from the Octagon snapshot
-            // (matches Supabase methodology); falls back to Kalshi lifetime
-            // volume for pre-API-change cached snapshots.
-            const vol = contractVolume(perMarket, m.volume);
+            // Tradeable filter — per-contract volume from the Octagon
+            // snapshot only (no Kalshi lifetime-volume fallback, which would
+            // be a look-ahead since lifetime includes post-entry trading).
+            const vol = contractVolume(perMarket);
+            if (vol === null) { signalsDroppedNoVolume++; continue; }
             if (vol < minVolume) continue;
             // Price is marketThen (the price you'd transact at for a resolved bet).
             if (marketThen < minPrice || marketThen > maxPrice) continue;
@@ -137,8 +160,13 @@ export async function handleBacktest(args: ParsedArgs): Promise<CLIResponse<Back
               pnl = (marketThen - marketNow) / 100;
               capital = (100 - marketThen) / 100;
             } else {
-              // Zero edge: capital still reflects the tradeable side implied by sign
-              // (use YES side so divide-by-zero checks don't fire on 0-edge signals).
+              // Zero edge: model and market agree exactly. Such signals are
+              // excluded from edge metrics (metrics.ts filters edge_pp != 0
+              // && |edge_pp| >= minEdgePp) but kept in `signals` so the CSV
+              // export retains a complete picture of what was scored. We
+              // assign YES-side capital so divide-by-zero checks don't fire
+              // — the capital field is consulted only when computing ROI on
+              // the edge subset, where these rows aren't present.
               capital = marketThen / 100;
             }
             if (capital <= 0) continue;
@@ -175,7 +203,7 @@ export async function handleBacktest(args: ParsedArgs): Promise<CLIResponse<Back
   // ─── UNRESOLVED: open markets with current Kalshi prices ───────────────
   if (!args.resolved) {
     try {
-      const openMarkets = await discoverOpenMarkets(db, { category: args.category });
+      const openMarkets = await discoverOpenMarkets(db, { universe, payloads, category: args.category });
 
       // Group by event_ticker to batch history fetches (same as resolved path).
       const openByEvent = new Map<string, typeof openMarkets>();
@@ -207,13 +235,21 @@ export async function handleBacktest(args: ParsedArgs): Promise<CLIResponse<Back
           const confidenceScore = snap.confidence_score ?? 0;
 
           const marketNow = m.market_prob * 100; // current Kalshi price (0-100)
-          const edgePp = Math.round((modelProb - marketThen) * 10) / 10;
+          // Unrounded edge — see resolved-leg comment above.
+          const edgePp = modelProb - marketThen;
 
-          // Tradeable filter — per-contract volume from the Octagon snapshot.
-          const vol = contractVolume(perMarket, m.volume);
+          // Tradeable filter — per-contract volume from the Octagon snapshot
+          // only (no Kalshi lifetime-volume fallback, see contractVolume).
+          const vol = contractVolume(perMarket);
+          if (vol === null) { signalsDroppedNoVolume++; continue; }
           if (vol < minVolume) continue;
-          // Price is marketNow (the current transactable price for an open position).
-          if (marketNow < minPrice || marketNow > maxPrice) continue;
+          // Filter on the ENTRY price (marketThen), not the current mark
+          // (marketNow). Filtering on marketNow conditions the sample on
+          // the outcome: positions that collapsed below minPrice or ran
+          // above maxPrice get silently dropped *after* we observe the
+          // move. That truncates both tails of the P&L distribution and
+          // is a look-ahead bias. Matches the resolved leg above.
+          if (marketThen < minPrice || marketThen > maxPrice) continue;
 
           // M2M P&L and capital per $1 face value.
           let pnl = 0;
@@ -262,9 +298,34 @@ export async function handleBacktest(args: ParsedArgs): Promise<CLIResponse<Back
   // ─── COMPUTE METRICS ───────────────────────────────────────────────────
   const metrics = computeMetrics(signals, minEdgePp);
 
+  // Fee model — defaults to 'none' so existing output is unchanged. With
+  // --fees taker we apply Kalshi's taker formula: 0.07 × p × (1−p) per
+  // entry, where p is the entry probability for the side we took. Maker
+  // execution assumes zero entry fee.
+  // We compute on the EDGE signals only (same population as flat_bet_pnl).
+  const feeModel = args.backtestFees ?? 'none';
+  let feeDrag = 0;
+  if (feeModel === 'taker') {
+    for (const s of signals) {
+      if (s.edge_pp === 0 || Math.abs(s.edge_pp) < minEdgePp) continue;
+      // Entry probability on the side we took (YES on positive edge, NO on negative).
+      const p = (s.edge_pp > 0 ? s.market_then : (100 - s.market_then)) / 100;
+      feeDrag += 0.07 * p * (1 - p);
+    }
+  }
+  const flatBetPnlNet = metrics.flat_bet_pnl - feeDrag;
+  const flatBetRoiNet = metrics.total_capital > 0 ? flatBetPnlNet / metrics.total_capital : 0;
+
   const result: BacktestResult = {
     ...metrics,
     days,
+    signals_dropped_no_volume: signalsDroppedNoVolume,
+    universe_source: universe.source,
+    universe_size: universe.events.length,
+    universe_description: universe.description,
+    fee_model: feeModel,
+    flat_bet_pnl_net: flatBetPnlNet,
+    flat_bet_roi_net: flatBetRoiNet,
     subscription_notice: subscriptionNotice,
   };
 

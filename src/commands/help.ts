@@ -120,6 +120,10 @@ ${p}backtest --category crypto            Filter by category
 ${p}backtest --min-edge 10                Stricter edge threshold in pp (default 0.5pp)
 ${p}backtest --min-volume 10              Per-contract volume gate (default 1)
 ${p}backtest --min-price 5 --max-price 95 Tradeable price band 0-100 (defaults: 5 / 95)
+${p}backtest --universe api              Systematic Octagon-API universe (default; reproducible across machines)
+${p}backtest --universe local            Legacy local octagon_reports universe (offline, NON-SYSTEMATIC)
+${p}backtest --fees taker                Apply Kalshi taker fee (0.07·p·(1−p) per entry); default 'none' = gross
+${p}backtest --fees maker                Maker execution (free entry)
 ${p}backtest --export results.csv         Per-market detail CSV
 ${p}backtest --json                       Machine-readable output
 
@@ -127,8 +131,9 @@ Looks back N days, compares what the model said then to where the market is now.
 Resolved markets: scored against Kalshi settlement (0 or 100).
 Unresolved markets: mark-to-market vs current Kalshi trading price.
 Per-contract entry: mp/kp come from the per-contract outcome_probabilities on the
-Octagon snapshot (no event-level fallback). Volume gate uses per-contract volume
-from the snapshot when available, else current Kalshi lifetime volume.
+Octagon snapshot (no event-level fallback). Volume gate requires per-contract
+volume from the snapshot; signals without it are dropped (the legacy fallback
+to Kalshi lifetime volume was a look-ahead and has been removed).
 ROI is capital-weighted: sum(pnl) / sum(capital) across edge signals, where capital
 is kp/100 for YES edges and (100-kp)/100 for NO edges (matches Supabase methodology).`,
 
@@ -467,7 +472,8 @@ System:
 
 Flags: --json, --refresh, --performance, --dry-run, --verbose
 Backtest flags: --days, --max-age, --resolved, --unresolved, --category, --min-edge,
-                --min-volume, --min-price, --max-price, --export
+                --min-volume, --min-price, --max-price, --export,
+                --universe api|local (default api), --fees none|taker|maker (default none)
 Run "kalshi help <command>" for detailed usage.`;
   }
 

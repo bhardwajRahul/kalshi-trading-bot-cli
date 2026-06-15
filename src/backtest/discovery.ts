@@ -1,8 +1,91 @@
 import type { Database } from 'bun:sqlite';
 import { callKalshiApi } from '../tools/kalshi/api.js';
 import type { KalshiMarket } from '../tools/kalshi/types.js';
+import { fetchAllOctagonEvents } from '../scan/octagon-events-api.js';
 
 const CONCURRENCY = 10;
+
+/** Where the backtest universe is sourced from. */
+export type UniverseSource = 'api' | 'local';
+
+export interface UniverseEntry {
+  event_ticker: string;
+  category: string | null;
+}
+
+export interface Universe {
+  events: UniverseEntry[];
+  source: UniverseSource;
+  description: string;
+}
+
+/**
+ * Resolve the backtest universe (the set of events scored).
+ *
+ * `api` (default): paginate Octagon's covered-events list — systematic,
+ * reproducible across machines, doesn't depend on whatever this install
+ * happened to analyze in the past. Uses fetchAllOctagonEvents directly;
+ * we deliberately do NOT pass hasHistory=true because a prior audit showed
+ * that flag silently dropped 373 of 662 events. The pipeline self-filters
+ * downstream: events with no usable snapshot return null from
+ * selectSnapshotByDate and are skipped cheaply.
+ *
+ * `local`: legacy behavior — pull from the local `octagon_reports` log.
+ * Reflects past usage of this machine, not a defined universe. Useful for
+ * offline runs and for comparing against historical backtests.
+ *
+ * KNOWN LIMITATION: the API returns *today's* covered universe, not the
+ * universe as of the entry date. Events dropped from coverage mid-window
+ * vanish from the backtest — survivorship at the universe level. A true
+ * point-in-time universe requires `events?as_of=<date>` upstream.
+ */
+export async function resolveUniverse(
+  db: Database,
+  opts?: { source?: UniverseSource; category?: string },
+): Promise<Universe> {
+  const source = opts?.source ?? 'api';
+  if (source === 'api') {
+    const all = await fetchAllOctagonEvents();
+    let events: UniverseEntry[] = all.map((e) => ({
+      event_ticker: e.event_ticker,
+      category: e.series_category ?? null,
+    }));
+    if (opts?.category) {
+      const needle = opts.category.toLowerCase();
+      events = events.filter((e) => e.category?.toLowerCase().includes(needle));
+    }
+    return {
+      events,
+      source,
+      description: `${events.length} events from Octagon API (systematic universe)`,
+    };
+  }
+  // Legacy local path
+  const { query, params } = buildEventQuery('', opts?.category);
+  const rows = db.query(query).all(params) as Array<{ event_ticker: string; category: string | null }>;
+  return {
+    events: rows.map((r) => ({ event_ticker: r.event_ticker, category: r.category })),
+    source,
+    description: `${rows.length} events from local octagon_reports (NON-SYSTEMATIC — reflects past usage of this machine)`,
+  };
+}
+
+/**
+ * Fetch the Kalshi event payload for each event in the universe, once.
+ * Returns a map keyed by event_ticker. Both discoverSettledMarkets and
+ * discoverOpenMarkets can read from this single map instead of each
+ * re-fetching every event payload — halves the Kalshi call count.
+ */
+export async function fetchEventPayloads(
+  universe: UniverseEntry[],
+): Promise<Map<string, KalshiMarket[]>> {
+  const out = new Map<string, KalshiMarket[]>();
+  await parallelMap(universe, async (entry) => {
+    const markets = await fetchEventMarkets(entry.event_ticker);
+    out.set(entry.event_ticker, markets);
+  }, CONCURRENCY);
+  return out;
+}
 
 export interface SettledMarket {
   ticker: string;
@@ -103,13 +186,23 @@ export async function parallelMap<T, R>(
  */
 export async function discoverSettledMarkets(
   db: Database,
-  opts?: { category?: string },
+  opts?: {
+    category?: string;
+    /** Pre-resolved universe + payloads (Phase 4 path). When omitted, falls back to the legacy local SQL path. */
+    universe?: Universe;
+    payloads?: Map<string, KalshiMarket[]>;
+  },
 ): Promise<SettledMarket[]> {
-  const { query, params } = buildEventQuery('', opts?.category);
-  const events = db.query(query).all(params) as Array<{ event_ticker: string; category: string | null }>;
+  let events: Array<{ event_ticker: string; category: string | null }>;
+  if (opts?.universe) {
+    events = opts.universe.events;
+  } else {
+    const { query, params } = buildEventQuery('', opts?.category);
+    events = db.query(query).all(params) as Array<{ event_ticker: string; category: string | null }>;
+  }
 
   const batchResults = await parallelMap(events, async ({ event_ticker, category: cat }) => {
-    const markets = await fetchEventMarkets(event_ticker);
+    const markets = opts?.payloads?.get(event_ticker) ?? await fetchEventMarkets(event_ticker);
     const settled: SettledMarket[] = [];
 
     for (const m of markets) {
@@ -137,13 +230,22 @@ export async function discoverSettledMarkets(
  */
 export async function discoverOpenMarkets(
   db: Database,
-  opts?: { category?: string },
+  opts?: {
+    category?: string;
+    universe?: Universe;
+    payloads?: Map<string, KalshiMarket[]>;
+  },
 ): Promise<OpenMarket[]> {
-  const { query: q2, params: p2 } = buildEventQuery('', opts?.category);
-  const events2 = db.query(q2).all(p2) as Array<{ event_ticker: string; category: string | null }>;
+  let events2: Array<{ event_ticker: string; category: string | null }>;
+  if (opts?.universe) {
+    events2 = opts.universe.events;
+  } else {
+    const { query: q2, params: p2 } = buildEventQuery('', opts?.category);
+    events2 = db.query(q2).all(p2) as Array<{ event_ticker: string; category: string | null }>;
+  }
 
   const batchResults = await parallelMap(events2, async ({ event_ticker, category: cat }) => {
-    const markets = await fetchEventMarkets(event_ticker);
+    const markets = opts?.payloads?.get(event_ticker) ?? await fetchEventMarkets(event_ticker);
     const open: OpenMarket[] = [];
 
     for (const m of markets) {

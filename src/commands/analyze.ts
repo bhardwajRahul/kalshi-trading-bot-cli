@@ -116,11 +116,42 @@ function getVolume(m: KalshiMarket): number {
 }
 
 /**
+ * Normalize user input into a canonical Kalshi ticker.
+ *
+ * Accepts any of:
+ *   - Bare ticker, any case: `kxmeasles-26`, `KXMEASLES-26`, `KxMeAsLeS-26`
+ *   - Kalshi URL: `https://kalshi.com/markets/kxmeasles/measles-cases/kxmeasles-26`
+ *   - URL without protocol: `kalshi.com/markets/kxmeasles-26`
+ *   - URL with query / fragment: `…/kxmeasles-26?ref=foo#yes`
+ *
+ * Strategy: detect URL-shaped input, extract the last non-empty path segment
+ * (which by Kalshi convention is the ticker), then uppercase. Bare tickers
+ * are simply uppercased. Kalshi's path is case-sensitive — without this
+ * `/markets/kxmeasles-26` 404s even though the ticker exists.
+ */
+export function normalizeKalshiInput(input: string): string {
+  const trimmed = input.trim();
+  const looksLikeUrl =
+    /^https?:\/\//i.test(trimmed) || /^(www\.)?kalshi\.com\//i.test(trimmed);
+  if (looksLikeUrl) {
+    const noProto = trimmed
+      .replace(/^https?:\/\/[^/]+/i, '')
+      .replace(/^(www\.)?kalshi\.com/i, '');
+    const path = noProto.replace(/[?#].*$/, '').replace(/\/+$/, '');
+    const segments = path.split('/').filter(Boolean);
+    const last = segments[segments.length - 1] ?? '';
+    if (last) return last.toUpperCase();
+  }
+  return trimmed.toUpperCase();
+}
+
+/**
  * Resolve a user-provided ticker to a market ticker.
- * Accepts: market ticker, event ticker, or series ticker.
+ * Accepts: market ticker, event ticker, series ticker, or Kalshi URL.
  * Returns the resolved KalshiMarket (picking the most active open market for events/series).
  */
-export async function resolveMarket(input: string): Promise<KalshiMarket> {
+export async function resolveMarket(rawInput: string): Promise<KalshiMarket> {
+  const input = normalizeKalshiInput(rawInput);
   // 1. Try as a market ticker first
   try {
     const res = await callKalshiApi('GET', `/markets/${input}`);
@@ -178,7 +209,7 @@ export async function resolveMarket(input: string): Promise<KalshiMarket> {
     if (!(err instanceof KalshiApiError && err.statusCode === 404)) throw err;
   }
 
-  throw new Error(`Could not find a market for "${input}". Try a full market ticker (e.g. KXBTC-26MAR14-T50049), event ticker (e.g. KXBTC-26MAR14), or series ticker (e.g. KXBTC).`);
+  throw new Error(`Could not find a market for "${rawInput}" (normalized to "${input}"). Try a market ticker (e.g. KXBTC-26MAR14-T50049), event ticker (e.g. KXBTC-26MAR14), series ticker (e.g. KXBTC), or a Kalshi URL like https://kalshi.com/markets/<series>/<slug>/<event>.`);
 }
 
 export async function handleAnalyze(
@@ -390,11 +421,41 @@ export async function handleAnalyze(
   //                 This is the "Refreshed" date — what bumps when --refresh runs.
   //   modelRunAt  = Octagon's analysis_last_updated (when their model last
   //                 scored this event). Independent of our cache.
-  const refreshedAt = latestDbReport
-    ? new Date(latestDbReport.fetched_at * 1000).toISOString().replace('T', ' ').slice(0, 16) + ' UTC'
+  //
+  // Load timestamps from a single coherent source — the row identified by
+  // report.reportId is the exact row used for THIS analysis. The previous
+  // implementation mixed fields from market-keyed and event-keyed rows
+  // (different captured runs), so refreshedAt and modelRunAt could refer
+  // to different snapshots.
+  //
+  // If the primary row doesn't carry analysis_last_updated (fetchReport
+  // path doesn't expose it), fall back to the latest event-keyed prefetch
+  // row for that field only — never for fetched_at.
+  const primaryRow = report.reportId
+    ? db.query(
+        `SELECT fetched_at, analysis_last_updated FROM octagon_reports WHERE report_id = $rid`,
+      ).get({ $rid: report.reportId }) as
+        | { fetched_at: number; analysis_last_updated: string | null }
+        | undefined
+    : undefined;
+  let fetchedAtEpoch = primaryRow?.fetched_at ?? null;
+  let analysisLastUpdated = primaryRow?.analysis_last_updated ?? null;
+  if ((!fetchedAtEpoch || !analysisLastUpdated) && eventTicker && eventTicker !== resolvedTicker) {
+    const eventRow = db.query(
+      `SELECT fetched_at, analysis_last_updated FROM octagon_reports
+       WHERE event_ticker = $et AND variant_used = 'events-api'
+       ORDER BY fetched_at DESC LIMIT 1`,
+    ).get({ $et: eventTicker }) as { fetched_at: number; analysis_last_updated: string | null } | undefined;
+    if (eventRow) {
+      fetchedAtEpoch = fetchedAtEpoch ?? eventRow.fetched_at;
+      analysisLastUpdated = analysisLastUpdated ?? eventRow.analysis_last_updated;
+    }
+  }
+  const refreshedAt = fetchedAtEpoch
+    ? new Date(fetchedAtEpoch * 1000).toISOString().replace('T', ' ').slice(0, 16) + ' UTC'
     : null;
-  const modelRunAt = latestDbReport?.analysis_last_updated
-    ? latestDbReport.analysis_last_updated.replace('T', ' ').slice(0, 16) + ' UTC'
+  const modelRunAt = analysisLastUpdated
+    ? analysisLastUpdated.replace('T', ' ').slice(0, 16) + ' UTC'
     : null;
 
   // hasModel + canComputeEdge were computed earlier (above Kelly/signal),
@@ -403,12 +464,13 @@ export async function handleAnalyze(
 
   // staleUpstream = user asked for --refresh but Octagon's upstream model run
   // timestamp didn't move. Cache fetch time bumped, but the underlying report
-  // body is the same one Octagon previously generated. The user wanted fresh
-  // analysis; they got an unchanged stale one.
+  // body is the same one Octagon previously generated. Compare against the
+  // same coherent source we used for modelRunAt above — otherwise we could
+  // false-positive on staleness when the two lookups disagreed.
   const staleUpstream = refresh
     && preRefreshAnalysis != null
-    && latestDbReport?.analysis_last_updated != null
-    && preRefreshAnalysis === latestDbReport.analysis_last_updated;
+    && analysisLastUpdated != null
+    && preRefreshAnalysis === analysisLastUpdated;
 
   // Null out trading-side fields when the underlying inputs are unavailable.
   // JSON consumers previously saw modelProb: 0.5 / marketProb: 0.5 / edge: 0

@@ -157,6 +157,14 @@ export async function handleSlashCommand(input: string): Promise<CommandResult |
         else if (a === '--min-price') { const v = Number(args[++i]); if (Number.isFinite(v) && v >= 0 && v <= 100) btArgs.minPrice = v; }
         else if (a === '--max-price') { const v = Number(args[++i]); if (Number.isFinite(v) && v >= 0 && v <= 100) btArgs.maxPrice = v; }
         else if (a === '--export') { const v = args[++i]; if (v) btArgs.exportPath = v; }
+        else if (a === '--universe') { const v = args[++i]; if (v === 'api' || v === 'local') btArgs.backtestUniverse = v; }
+        else if (a === '--fees') { const v = args[++i]; if (v === 'none' || v === 'taker' || v === 'maker') btArgs.backtestFees = v; }
+      }
+      // Mirror parse-args' mutual-exclusion check — the slash parser above
+      // accepts both flags independently, which would put btArgs in a
+      // conflicting state before handleBacktest could see it.
+      if (btArgs.resolved && btArgs.unresolved) {
+        return { output: 'Error: --resolved and --unresolved cannot be used together.' };
       }
       const mode = btArgs.resolved ? 'resolved markets' : btArgs.unresolved ? 'open markets' : 'resolved + open markets';
       const daysLabel = btArgs.days ?? 15;
