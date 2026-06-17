@@ -523,7 +523,7 @@ export class SetupWizardController {
     const octagonKey = process.env.OCTAGON_API_KEY;
     if (octagonKey) {
       try {
-        const octagonBase = process.env.OCTAGON_BASE_URL ?? 'https://api-gateway.octagonagents.com/v1';
+        const octagonBase = process.env.OCTAGON_BASE_URL ?? 'https://api.octagonai.co/v1';
         const res = await fetch(`${octagonBase}/models`, {
           headers: { Authorization: `Bearer ${octagonKey}` },
           signal: AbortSignal.timeout(10_000),

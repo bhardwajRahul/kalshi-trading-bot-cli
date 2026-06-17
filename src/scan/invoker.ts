@@ -1,6 +1,6 @@
-import type { OctagonInvoker, OctagonVariant } from './types.js';
 import { callKalshiApi, KalshiApiError } from '../tools/kalshi/api.js';
 import { logger } from '../utils/logger.js';
+import type { OctagonInvoker, OctagonVariant } from './types.js';
 
 /**
  * Slugify a title for Kalshi website URL paths.
@@ -103,7 +103,7 @@ function extractTextFromResponse(data: unknown): string {
  */
 export async function callOctagon(input: string, variant: OctagonVariant): Promise<string> {
   const apiKey = process.env.OCTAGON_API_KEY;
-  const baseUrl = process.env.OCTAGON_BASE_URL ?? 'https://api-gateway.octagonagents.com/v1';
+  const baseUrl = process.env.OCTAGON_BASE_URL ?? 'https://api.octagonai.co/v1';
 
   if (!apiKey) throw new Error('OCTAGON_API_KEY not set. Get one at https://app.octagonai.co');
 
