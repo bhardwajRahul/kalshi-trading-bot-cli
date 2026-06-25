@@ -38,6 +38,7 @@ import { handleCorrelate, formatCorrelationHuman } from './correlate.js';
 import { handleBasket, formatBasketHuman } from './basket.js';
 import { handleEvents, formatEventsHuman } from './events.js';
 import { handleTrust, formatTrustHuman } from './trust.js';
+import { handleReport, formatReportHuman } from './report.js';
 import { handleSeries, formatSeriesHuman } from './series.js';
 import { handleEditorialThemes, formatEditorialThemesHuman } from './editorial-themes.js';
 import { handleCatalysts, formatCatalystsHuman } from './catalysts.js';
@@ -251,6 +252,16 @@ export async function handleSlashCommand(input: string): Promise<CommandResult |
         asyncFollowUp: async () => {
           const resp = await handleTrust(parsed);
           return resp.ok ? formatTrustHuman(resp.data) : (resp.error?.message ?? 'trust failed');
+        },
+      };
+    }
+    case 'report': {
+      const parsed = parseArgs(['report', ...args]);
+      return {
+        output: parsed.refresh ? 'Refreshing Octagon report...' : 'Fetching Octagon report...',
+        asyncFollowUp: async () => {
+          const resp = await handleReport(parsed);
+          return resp.ok ? formatReportHuman(resp.data) : (resp.error?.message ?? 'report failed');
         },
       };
     }

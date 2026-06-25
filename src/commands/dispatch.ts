@@ -35,6 +35,7 @@ import { searchKalshiMarkets, getMarketsWithEdge } from '../scan/octagon-kalshi-
 import { formatMarketSearchHuman, formatMarketsWithEdgeHuman } from './search-remote.js';
 import { handleEvents, formatEventsHuman } from './events.js';
 import { handleTrust, formatTrustHuman } from './trust.js';
+import { handleReport, formatReportHuman } from './report.js';
 import { handleSeries, formatSeriesHuman } from './series.js';
 import { handleEditorialThemes, formatEditorialThemesHuman } from './editorial-themes.js';
 import { handleCatalysts, formatCatalystsHuman } from './catalysts.js';
@@ -495,6 +496,20 @@ export async function dispatch(args: ParsedArgs): Promise<void> {
         console.log(formatSeriesHuman(resp.data));
       } else {
         console.error(resp.error?.message ?? 'series failed');
+      }
+      process.exit(resp.ok ? ExitCode.SUCCESS : ExitCode.USER_ERROR);
+      return;
+    }
+
+    // ─── report (full Octagon markdown report) ─────────────────────────
+    if (resolved.canonical === 'report') {
+      const resp = await handleReport(args);
+      if (json) {
+        console.log(JSON.stringify(resp));
+      } else if (resp.ok) {
+        console.log(formatReportHuman(resp.data));
+      } else {
+        console.error(resp.error?.message ?? 'report failed');
       }
       process.exit(resp.ok ? ExitCode.SUCCESS : ExitCode.USER_ERROR);
       return;

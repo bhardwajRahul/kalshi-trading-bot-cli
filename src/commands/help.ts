@@ -249,6 +249,27 @@ Flags:
 
 Output ranks pairs ascending by correlation — most-uncorrelated first.`,
 
+    report: `**${p}report** — Print the full Octagon markdown report for an event
+
+${p}report <event_ticker>           Cached report body (most recent)
+${p}report <market_ticker>          Resolves to the parent event automatically
+${p}report <series_ticker>          Resolves to the latest event in the series
+${p}report <kalshi_url>             Accepts a full kalshi.com URL too
+${p}report <ticker> --refresh       Force a fresh pull from Octagon (costs 3 credits)
+
+The full deep-research markdown body — same content the OctagonAI web app shows.
+Lookup is more lenient than \`analyze\`: tries Octagon's event endpoint first
+before falling back to the Kalshi resolver chain, so series tickers and
+events without open Kalshi markets still work.
+
+Flags:
+  --refresh    Force a fresh report instead of returning the cached one
+  --json       JSON envelope output (rawReport carries the markdown)
+
+Output footer always shows: source (cache | fresh | cache-miss), local cache
+fetch timestamp + age, and the upstream Octagon analysis_last_updated when
+available — so you can decide whether to --refresh.`,
+
     trust: `**${p}trust** — Trader Trust scorecard (market-integrity metrics)
 
 ${p}trust <event_ticker>                       Table across all markets in the event
@@ -458,6 +479,7 @@ Discovery:
   catalysts upcoming --days 30  Markets closing soon, grouped by week
   trust <event_ticker>          Trader Trust scorecard (table across markets)
   trust <event> --market <mkt>  Single-market trust detail card
+  report <event_ticker>         Full Octagon markdown report (use --refresh for fresh pull)
   watch <ticker>                Live price/orderbook feed
   watch --theme <theme>         Continuous theme scan (Ctrl+C to stop)
   watch --refresh               Force index rebuild before watching
@@ -537,6 +559,7 @@ Discovery:
   /catalysts upcoming --days 30  Markets closing soon, grouped by week
   /trust <event_ticker>          Trader Trust scorecard (table across markets)
   /trust <event> --market <mkt>  Single-market trust detail card
+  /report <event_ticker>         Full Octagon markdown report (use --refresh for fresh pull)
   /watch <ticker>                Live price/orderbook feed
   /watch --theme <theme>         Continuous theme scan (Esc to stop)
   /watch --refresh               Force index rebuild before watching
