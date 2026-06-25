@@ -139,6 +139,7 @@ Type help for commands, or just ask a question.
 | `catalysts upcoming --days N` | Markets closing in the next N days, grouped by week |
 | `trust <event_ticker>` | Trader Trust scorecard — per-market integrity scores (table view) |
 | `trust <event> --market <market>` | Single-market Trader Trust detail card (use `--verbose` for evidence) |
+| `report <ticker>` | Full Octagon markdown report for an event (accepts event/market/series/URL). `--refresh` forces a fresh pull. |
 | `themes` (registry) | Editorial narrative buckets — list/show/import/create/delete/add-series |
 | `themes report` | 25-theme dashboard with SEO + liquidity |
 | `themes audit` | Flag dead themes (high SEO + zero volume) |
@@ -161,7 +162,7 @@ Type help for commands, or just ask a question.
 | Flag | Description |
 |------|-------------|
 | `--json` | JSON output for scripts and agents |
-| `--refresh` | Force fresh Octagon report (analyze) |
+| `--refresh` | Force fresh Octagon report (analyze, report) |
 | `--performance` | Include win rate, Sharpe, Brier scores (portfolio) |
 | `--dry-run` | Scan without persisting edges (watch) |
 | `--verbose` | Verbose output |

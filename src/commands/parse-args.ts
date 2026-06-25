@@ -13,6 +13,8 @@ const SUBCOMMANDS = [
   'events', 'series', 'catalysts',
   // Trader Trust scorecard
   'trust',
+  // Full markdown report viewer
+  'report',
 ] as const;
 
 export type Subcommand = (typeof SUBCOMMANDS)[number];

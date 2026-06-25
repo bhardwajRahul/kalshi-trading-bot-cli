@@ -361,6 +361,7 @@ export async function runCli(options?: { forceSetup?: boolean }) {
       { value: 'basket', label: 'basket', description: 'Build / backtest / size baskets' },
       { value: 'events', label: 'events', description: 'Octagon events (event ↔ outcome ladder)' },
       { value: 'trust', label: 'trust', description: 'Trader Trust scorecard (per-market integrity scores)' },
+      { value: 'report', label: 'report', description: 'Full Octagon markdown report for an event' },
       { value: 'series', label: 'series', description: 'Series rollup / NAV' },
       { value: 'catalysts', label: 'catalysts', description: 'Upcoming market closes by week' },
       { value: 'themes', label: 'themes', description: 'Editorial narrative registry + dashboard' },
@@ -432,6 +433,7 @@ export async function runCli(options?: { forceSetup?: boolean }) {
     { name: 'correlate', description: 'Pairwise correlation matrix (2-100 tickers)', getArgumentCompletions: usageHint('<ticker1> <ticker2> [...] [--window-days N]', 'e.g. KXA KXB KXC --window-days 90') },
     { name: 'events', description: 'Octagon events — outcome ladder per event', getArgumentCompletions: usageHint('<event_ticker> | --category Politics | --min-volume 10000', 'e.g. KXFEDCHAIRNOM-29 to drill in') },
     { name: 'trust', description: 'Trader Trust scorecard (per-market integrity scores)', getArgumentCompletions: usageHint('<event_ticker> [--market <market_ticker>] [--verbose]', 'e.g. KXMENWORLDCUP-26 --market KXMENWORLDCUP-26-FR') },
+    { name: 'report', description: 'Print the full Octagon markdown report for an event', getArgumentCompletions: usageHint('<event_ticker | market_ticker | series_ticker | kalshi_url> [--refresh]', 'e.g. KXAAPLCEOCHANGE --refresh') },
     { name: 'series', description: 'Kalshi series rollup (24h vol, market count)', getArgumentCompletions: (typed: string): AutocompleteItem[] | null => {
       const opts = [
         { value: '<series_ticker>', label: '<series_ticker>', description: 'Drill into one series (e.g. KXBTCD)' },
